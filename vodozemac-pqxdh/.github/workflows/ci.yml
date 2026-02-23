@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  style:
+    name: Check style
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: nightly
+        components: rustfmt
+
+    - name: Cargo fmt
+      run: cargo fmt --all -- --check
+
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+    - name: Check the spelling of the files in our repo
+      uses: crate-ci/typos@bb4666ad77b539a6b4ce4eda7ebb6de553704021
+
+  clippy:
+    name: Run clippy
+    needs: [style]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: nightly
+        components: clippy
+
+    - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
+
+    - name: Clippy (all-features)
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Clippy (no-default-features)
+      run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+  hack:
+    name: Check that each feature compiles independently
+    needs: [style]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: stable
+
+    - name: Load cache
+      uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
+
+    - name: Install cargo-hack
+      uses: taiki-e/install-action@3522286d40783523f9c7880e33f785905b4c20d0
+      with:
+        tool: cargo-hack
+
+    - name: Check that our features compile
+      run: cargo hack check --each-feature --no-dev-deps
+
+  test:
+    name: ${{ matrix.target.name }} ${{ matrix.channel }}
+    needs: [clippy]
+
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      matrix:
+        target: [
+          { "os": "ubuntu-latest",  "toolchain": "x86_64-unknown-linux-gnu", "name": "Linux GNU" },
+          { "os": "macos-15-intel", "toolchain": "x86_64-apple-darwin ",     "name": "macOS x86" },
+          { "os": "macos-latest",   "toolchain": "aarch64-apple-darwin",     "name": "macOS arm" },
+          { "os": "windows-latest", "toolchain": "x86_64-pc-windows-msvc",   "name": "Windows MSVC" },
+        ]
+        channel: [stable, beta, nightly]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ format('{0}-{1}', matrix.channel, matrix.target.toolchain) }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
+
+      - name: Test
+        run: cargo nextest run --profile ci --all-features
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@47f89e9acb64b76debcd5ea40642d25a4adced9f
+        with:
+          files: ./target/nextest/ci/junit.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
