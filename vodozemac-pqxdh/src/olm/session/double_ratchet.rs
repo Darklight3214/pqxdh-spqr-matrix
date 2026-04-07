@@ -82,31 +82,26 @@ impl DoubleRatchet {
             ratchet_count: RatchetCount::new(),
             active_ratchet: Ratchet::new(root_key),
             symmetric_key_ratchet: chain_key,
-            pq_ratchet_count: 0,
         };
 
         Self { inner: ratchet.into() }
     }
 
 
-    /// Create a new `DoubleRatchet` instance from pre-expanded PQXDH keys.
-    ///
-    /// PQXDH produces (root_key, chain_key) just like 3DH expansion does.
+    /// Create a new DoubleRatchet from pre-expanded PQXDH keys.
     pub fn active_pqxdh(root_key: Box<[u8; 32]>, chain_key: Box<[u8; 32]>) -> Self {
         let root_key = RootKey::new(root_key);
         let chain_key = ChainKey::new(chain_key);
 
         let ratchet = ActiveDoubleRatchet {
-            parent_ratchet_key: None, // First chain in a session lacks parent ratchet key
+            parent_ratchet_key: None,
             ratchet_count: RatchetCount::new(),
             active_ratchet: Ratchet::new(root_key),
             symmetric_key_ratchet: chain_key,
-            pq_ratchet_count: 0,
         };
 
         Self { inner: ratchet.into() }
     }
-
 
     #[cfg(feature = "libolm-compat")]
     pub fn from_ratchet_and_chain_key(ratchet: Ratchet, chain_key: ChainKey) -> Self {
@@ -116,7 +111,6 @@ impl DoubleRatchet {
                 ratchet_count: RatchetCount::unknown(), // nor the ratchet count
                 active_ratchet: ratchet,
                 symmetric_key_ratchet: chain_key,
-            pq_ratchet_count: 0,
             }
             .into(),
         }
@@ -127,7 +121,9 @@ impl DoubleRatchet {
         ratchet_key: RemoteRatchetKey,
     ) -> Self {
         let ratchet_count = RatchetCount::new();
-        let ratchet = InactiveDoubleRatchet { root_key, ratchet_key, ratchet_count };
+        let ratchet = InactiveDoubleRatchet {
+            root_key, ratchet_key, ratchet_count,
+        };
 
         Self { inner: ratchet.into() }
     }
@@ -138,7 +134,9 @@ impl DoubleRatchet {
         ratchet_key: RemoteRatchetKey,
     ) -> Self {
         let ratchet_count = RatchetCount::unknown();
-        let ratchet = InactiveDoubleRatchet { root_key, ratchet_key, ratchet_count };
+        let ratchet = InactiveDoubleRatchet {
+            root_key, ratchet_key, ratchet_count,
+        };
 
         Self { inner: ratchet.into() }
     }
@@ -164,6 +162,7 @@ impl DoubleRatchet {
 
         (Self { inner: DoubleRatchetState::Inactive(ratchet) }, receiver_chain)
     }
+
 }
 
 impl Debug for DoubleRatchet {
@@ -226,7 +225,6 @@ impl InactiveDoubleRatchet {
             ratchet_count: self.ratchet_count.advance(),
             active_ratchet,
             symmetric_key_ratchet: chain_key,
-            pq_ratchet_count: 0,
         }
     }
 }
@@ -271,28 +269,11 @@ struct ActiveDoubleRatchet {
 
     active_ratchet: Ratchet,
     symmetric_key_ratchet: ChainKey,
-    
-    /// SPQR: counts ratchet steps since last PQ mix
-    #[serde(default)]
-    pq_ratchet_count: u32,
 }
 
 impl ActiveDoubleRatchet {
     fn advance(&self, ratchet_key: RemoteRatchetKey) -> (InactiveDoubleRatchet, ReceiverChain) {
-        // SPQR: every 50 ratchet steps, mix a fresh PQ secret into root key
-        const PQ_INTERVAL: u32 = 50;
-        let pq_due = self.pq_ratchet_count >= PQ_INTERVAL;
-
-        let (root_key, remote_chain) = if pq_due {
-            let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::MlKem768)
-                .expect("ML-KEM-768 unavailable");
-            let (pk, sk) = kem.keypair().expect("KEM keygen failed");
-            let (_, ss) = kem.encapsulate(&pk).expect("KEM encapsulate failed");
-            let pq_bytes = ss.into_vec();
-            self.active_ratchet.advance_with_pq(ratchet_key, Some(&pq_bytes))
-        } else {
-            self.active_ratchet.advance(ratchet_key)
-        };
+        let (root_key, remote_chain) = self.active_ratchet.advance(ratchet_key);
 
         let new_ratchet_count = self.ratchet_count.advance();
         let ratchet = InactiveDoubleRatchet {
@@ -304,6 +285,8 @@ impl ActiveDoubleRatchet {
 
         (ratchet, receiver_chain)
     }
+
+
 
     fn ratchet_key(&self) -> RatchetPublicKey {
         RatchetPublicKey::from(self.active_ratchet.ratchet_key())

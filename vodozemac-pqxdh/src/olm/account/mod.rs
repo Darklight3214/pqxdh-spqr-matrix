@@ -171,6 +171,7 @@ impl Account {
     }
 
     /// Get the secret key of the signed prekey (for DH operations).
+    #[allow(dead_code)]
     pub(crate) fn signed_prekey_secret(&self) -> Option<&Curve25519SecretKey> {
         self.signed_prekey.as_ref().map(|k| k.secret_key())
     }
@@ -260,6 +261,7 @@ impl Account {
             &remote_signed_prekey,
             remote_one_time_key.as_ref(),
             Some(&kem_ss_bytes),
+            &self.curve25519_key(),
         );
         let session_keys = SessionKeys {
             identity_key: self.curve25519_key(),
@@ -413,6 +415,7 @@ impl Account {
             &pre_key_message.identity_key(),
             &pre_key_message.base_key(),
             Some(&kem_ss_bytes),
+            &self.curve25519_key(),
         );
 
         let session_keys = SessionKeys {

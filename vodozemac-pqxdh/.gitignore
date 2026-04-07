@@ -5,3 +5,4 @@ Cargo.lock
 /afl/*/out*
 mutants.out*
 coverage.xml
+pq-olm-bench/target/

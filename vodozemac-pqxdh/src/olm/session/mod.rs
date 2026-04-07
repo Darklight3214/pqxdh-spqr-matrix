@@ -19,6 +19,10 @@ pub mod message_key;
 pub mod ratchet;
 mod receiver_chain;
 mod root_key;
+pub(crate) mod spqr;
+
+pub use spqr::BraidMessage;
+use spqr::{BraidRole, SpqrConfig, SpqrState};
 
 use std::fmt::Debug;
 
@@ -151,17 +155,21 @@ pub struct Session {
     sending_ratchet: DoubleRatchet,
     receiving_chains: ChainStore,
     config: SessionConfig,
+    /// SPQR state for parallel post-quantum ratcheting.
+    /// `None` for classical (non-PQXDH) sessions.
+    spqr: Option<SpqrState>,
 }
 
 impl Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { session_keys: _, sending_ratchet, receiving_chains, config } = self;
+        let Self { session_keys: _, sending_ratchet, receiving_chains, config, spqr } = self;
 
         f.debug_struct("Session")
             .field("session_id", &self.session_id())
             .field("sending_ratchet", &sending_ratchet)
             .field("receiving_chains", &receiving_chains.inner)
             .field("config", config)
+            .field("spqr", &spqr.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -174,13 +182,17 @@ impl Session {
         session_keys: SessionKeys,
     ) -> Self {
         let (root_key, chain_key) = shared_secret.expand();
-        let local_ratchet = DoubleRatchet::active_pqxdh(root_key, chain_key);
+        let local_ratchet = DoubleRatchet::active_pqxdh(root_key.clone(), chain_key);
+
+        // Derive SPQR auth key from the PQXDH root key material
+        let spqr = SpqrState::new(BraidRole::Initiator, root_key.as_ref(), SpqrConfig::default());
 
         Self {
             session_keys,
             sending_ratchet: local_ratchet,
             receiving_chains: Default::default(),
             config,
+            spqr: Some(spqr),
         }
     }
 
@@ -192,6 +204,7 @@ impl Session {
         session_keys: SessionKeys,
     ) -> Self {
         let (root_key, remote_chain_key) = shared_secret.expand();
+        let root_key_bytes = root_key.clone(); // Save before moving into RemoteRootKey
 
         let remote_ratchet_key = RemoteRatchetKey::from(remote_ratchet_key);
         let root_key = RemoteRootKey::new(root_key);
@@ -204,11 +217,15 @@ impl Session {
         let mut ratchet_store = ChainStore::new();
         ratchet_store.inner.push(remote_ratchet);
 
+        // Derive SPQR auth key from the PQXDH root key material
+        let spqr = SpqrState::new(BraidRole::Responder, root_key_bytes.as_ref(), SpqrConfig::default());
+
         Self {
             session_keys,
             sending_ratchet: local_ratchet,
             receiving_chains: ratchet_store,
             config,
+            spqr: Some(spqr),
         }
     }
 
@@ -224,6 +241,7 @@ impl Session {
             sending_ratchet: local_ratchet,
             receiving_chains: Default::default(),
             config,
+            spqr: None,
         }
     }
 
@@ -251,6 +269,7 @@ impl Session {
             sending_ratchet: local_ratchet,
             receiving_chains: ratchet_store,
             config,
+            spqr: None,
         }
     }
 
@@ -353,6 +372,7 @@ impl Session {
             sending_ratchet: self.sending_ratchet.clone(),
             receiving_chains: self.receiving_chains.clone(),
             config: self.config,
+            spqr: self.spqr.clone(),
         }
     }
 
@@ -501,6 +521,7 @@ mod libolm_compat {
                     sending_ratchet,
                     receiving_chains,
                     config: SessionConfig::version_1(),
+                    spqr: None,
                 })
             } else if let Some(chain) = receiving_chains.get(0) {
                 let sending_ratchet = DoubleRatchet::inactive_from_libolm_pickle(
@@ -513,6 +534,7 @@ mod libolm_compat {
                     sending_ratchet,
                     receiving_chains,
                     config: SessionConfig::version_1(),
+                    spqr: None,
                 })
             } else {
                 Err(crate::LibolmPickleError::InvalidSession)
@@ -530,6 +552,8 @@ pub struct SessionPickle {
     receiving_chains: ChainStore,
     #[serde(default = "default_config")]
     config: SessionConfig,
+    #[serde(default)]
+    spqr: Option<SpqrState>,
 }
 
 const fn default_config() -> SessionConfig {
@@ -560,6 +584,7 @@ impl From<SessionPickle> for Session {
             sending_ratchet: pickle.sending_ratchet,
             receiving_chains: pickle.receiving_chains,
             config: pickle.config,
+            spqr: pickle.spqr,
         }
     }
 }
@@ -844,28 +869,371 @@ mod test {
     }
 }
 
+
 // ============================================================
-// SPQR STUBS - Added by pqxdh-node integration
-// These delegate to standard encrypt/decrypt. Replace with real
-// SPQR implementation once double_ratchet.rs is wired.
+// SPQR - Parallel Post-Quantum Ratchet (Signal-compatible)
+//
+// The SPQR ratchet runs in parallel with the classical DH
+// Double Ratchet, forming a "Triple Ratchet." Message keys
+// from both ratchets are combined via HKDF before use.
+//
+// The Braid protocol messages (Header, EK, CT1, CT2) are
+// piggybacked on regular encrypted Matrix events.
 // ============================================================
 impl Session {
-    /// SPQR-aware encrypt.
-    /// Returns (OlmMessage, Option<kem_ciphertext>).
-    /// Stub: always returns None for KEM ciphertext.
-    pub fn encrypt_pq(&mut self, plaintext: &str) -> (OlmMessage, Option<Vec<u8>>) {
-        (self.encrypt(plaintext), None)
+    /// Returns `true` if this session has SPQR post-quantum protection.
+    pub fn has_spqr(&self) -> bool {
+        self.spqr.is_some()
     }
 
-    /// SPQR-aware decrypt.
-    /// Accepts optional SPQR KEM ciphertext + own KEM secret key.
-    /// Stub: ignores both, delegates to standard decrypt.
+    /// Get a reference to the SPQR state, if present.
+    pub fn spqr_state(&self) -> Option<&SpqrState> {
+        self.spqr.as_ref()
+    }
+
+    /// Get a mutable reference to the SPQR state, if present.
+    pub fn spqr_state_mut(&mut self) -> Option<&mut SpqrState> {
+        self.spqr.as_mut()
+    }
+
+    /// Process Braid protocol messages from an already-decrypted event.
+    ///
+    /// Use this after `create_inbound_session_pqxdh()` to process the Braid
+    /// messages that were piggybacked on the PreKey message but not handled
+    /// during session creation.
+    ///
+    /// Returns any response Braid messages that should be sent back to the
+    /// peer on the next outgoing message.
+    pub fn process_braid_messages(&mut self, incoming: &[BraidMessage]) -> Vec<BraidMessage> {
+        let mut response = Vec::new();
+        if let Some(ref mut spqr) = self.spqr {
+            Self::process_incoming_braid(spqr, incoming, &mut response);
+        }
+        response
+    }
+
+    /// SPQR Triple Ratchet encrypt.
+    ///
+    /// 1. Advances the Braid state machine, producing outbound `BraidMessage`s
+    /// 2. Combines the DH ratchet message key with the SPQR epoch key
+    /// 3. Encrypts with the combined key
+    ///
+    /// Returns `SpqrWireData` containing the encrypted message, SPQR metadata,
+    /// and any Braid messages for the peer. When SPQR is not yet initialized,
+    /// falls back to standard DH-only encryption.
+    pub fn encrypt_pq(&mut self, plaintext: impl AsRef<[u8]>) -> SpqrWireData {
+        let mut braid_msgs = Vec::new();
+
+        // Step 1: Advance Braid (generate outbound protocol messages)
+        if let Some(ref mut spqr) = self.spqr {
+            Self::advance_braid_send(spqr, &mut braid_msgs);
+        }
+
+        // Step 2: Try to get an SPQR key for combined encryption
+        if let Some(ref mut spqr) = self.spqr {
+            if let Some((epoch, index, spqr_key)) = spqr.send_key() {
+                // Get the DH message key from the double ratchet
+                let mk = self.sending_ratchet.next_message_key();
+                let combined = spqr::combine_keys(mk.key(), &spqr_key);
+
+                // Encrypt with the combined key
+                let message = match self.config.version {
+                    Version::V1 => {
+                        mk.with_combined_key(combined).encrypt_truncated_mac(plaintext.as_ref())
+                    }
+                    Version::V2 => {
+                        mk.with_combined_key(combined).encrypt(plaintext.as_ref())
+                    }
+                };
+
+                let olm_msg = if self.has_received_message() {
+                    OlmMessage::Normal(message)
+                } else {
+                    OlmMessage::PreKey(PreKeyMessage::new(self.session_keys, message))
+                };
+
+                return SpqrWireData {
+                    message: olm_msg,
+                    spqr_meta: Some(SpqrMessageMeta { epoch, index }),
+                    braid_msgs,
+                };
+            }
+        }
+
+        // Fallback: standard encrypt (no SPQR key available yet)
+        SpqrWireData {
+            message: self.encrypt(plaintext),
+            spqr_meta: None,
+            braid_msgs,
+        }
+    }
+
+    /// SPQR Triple Ratchet decrypt.
+    ///
+    /// 1. Processes incoming `BraidMessage`s to advance the Braid state machine
+    /// 2. If SPQR metadata is present, combines DH + SPQR keys for decryption
+    /// 3. Returns (plaintext, response_braid_msgs) — the response messages
+    ///    should be sent back to the peer on the next encrypt
     pub fn decrypt_pq(
         &mut self,
         message: &OlmMessage,
-        _spqr_kem_ct: Option<&[u8]>,
-        _own_kem_sk: Option<&[u8]>,
+        spqr_meta: Option<&SpqrMessageMeta>,
+        incoming_braid: &[BraidMessage],
+    ) -> Result<(Vec<u8>, Vec<BraidMessage>), DecryptionError> {
+        let mut response_braid = Vec::new();
+
+        // Step 1: Process incoming Braid messages
+        if let Some(ref mut spqr) = self.spqr {
+            Self::process_incoming_braid(spqr, incoming_braid, &mut response_braid);
+        }
+
+        // Step 2: Decrypt with combined key if SPQR metadata is present
+        let plaintext = if let (Some(spqr), Some(meta)) = (&mut self.spqr, spqr_meta) {
+            let spqr_key = spqr.recv_key(meta.epoch, meta.index)
+                .map_err(|_| DecryptionError::MissingMessageKey(meta.index as u64))?;
+            self.decrypt_decoded_pq(message, &spqr_key)?
+        } else {
+            self.decrypt(message)?
+        };
+
+        Ok((plaintext, response_braid))
+    }
+
+    /// Internal: decrypt with SPQR key combination applied to the message key.
+    fn decrypt_decoded_pq(
+        &mut self,
+        message: &OlmMessage,
+        spqr_key: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        self.decrypt(message)
+        let decoded = match message {
+            OlmMessage::Normal(m) => m,
+            OlmMessage::PreKey(m) => &m.message,
+        };
+
+        let ratchet_key = RemoteRatchetKey::from(decoded.ratchet_key);
+
+        if let Some(ratchet) = self.receiving_chains.find_ratchet(&ratchet_key) {
+            ratchet.decrypt_with_spqr_key(decoded, &self.config, spqr_key)
+        } else {
+            let (sending_ratchet, mut remote_ratchet) = self.sending_ratchet.advance(ratchet_key);
+            let plaintext = remote_ratchet.decrypt_with_spqr_key(decoded, &self.config, spqr_key)?;
+            self.sending_ratchet = sending_ratchet;
+            self.receiving_chains.push(remote_ratchet);
+            Ok(plaintext)
+        }
+    }
+
+    /// Advance the Braid on the sending side (EK-sender path).
+    ///
+    /// Drives: KeysUnsampled → HeaderSent → EkSent (producing Header + EK messages).
+    /// This is called automatically during `encrypt_pq`.
+    fn advance_braid_send(spqr: &mut SpqrState, out: &mut Vec<BraidMessage>) {
+        use spqr::braid::BraidState;
+
+        // KeysUnsampled → send Header
+        if matches!(spqr.braid, BraidState::KeysUnsampled(_)) {
+            if let Ok(msg) = spqr.braid.send_header() {
+                out.push(msg);
+            }
+        }
+
+        // HeaderSent → send EK
+        if matches!(spqr.braid, BraidState::HeaderSent(_)) {
+            if let Ok(msg) = spqr.braid.send_ek() {
+                out.push(msg);
+            }
+        }
+    }
+
+    /// Process incoming Braid messages and produce responses.
+    ///
+    /// Handles all CT-sender side transitions:
+    /// - recv_header → send_ct1 (produces epoch secret + CT1 message)
+    /// - recv_ek → send_ct2 (produces CT2 message)
+    ///
+    /// And EK-sender side receives:
+    /// - recv_ct1
+    /// - recv_ct2 (produces epoch secret)
+    fn process_incoming_braid(
+        spqr: &mut SpqrState,
+        incoming: &[BraidMessage],
+        response: &mut Vec<BraidMessage>,
+    ) {
+        use spqr::braid::BraidState;
+
+        for msg in incoming {
+            match msg {
+                // ── CT-sender side: receive Header from peer ──
+                BraidMessage::Header { epoch, hdr, mac } => {
+                    if spqr.braid.recv_header(*epoch, hdr.clone(), mac).is_ok() {
+                        // Immediately send CT1 (produces epoch secret)
+                        if matches!(spqr.braid, BraidState::HeaderReceived(_)) {
+                            if let Ok((ct1_msg, epoch_secret)) = spqr.braid.send_ct1() {
+                                // Defer activation — the peer can't derive this
+                                // secret until they receive CT2 (which we haven't
+                                // sent yet). We'll activate it at send_ct2 time.
+                                spqr.defer_epoch(&epoch_secret);
+                                response.push(ct1_msg);
+                            }
+                        }
+                    }
+                }
+
+                // ── EK-sender side: receive CT1 from peer ──
+                BraidMessage::Ciphertext1 { epoch, ct1 } => {
+                    let _ = spqr.braid.recv_ct1(*epoch, ct1.clone());
+                }
+
+                // ── CT-sender side: receive EK from peer ──
+                BraidMessage::EncapsulationKey { epoch, ek } => {
+                    if spqr.braid.recv_ek(*epoch, ek.clone()).is_ok() {
+                        // Immediately send CT2
+                        if matches!(spqr.braid, BraidState::Ct1SentEkReceived(_)) {
+                            if let Ok(ct2_msg) = spqr.braid.send_ct2() {
+                                // NOW activate the deferred epoch — the peer will
+                                // receive CT2 and derive the same secret via recv_ct2.
+                                spqr.confirm_pending_epoch();
+                                response.push(ct2_msg);
+                            }
+                        }
+                    }
+                }
+
+                // ── EK-sender side: receive CT2 from peer (completes epoch) ──
+                BraidMessage::Ciphertext2 { epoch, ct2, mac } => {
+                    if let Ok(epoch_secret) = spqr.braid.recv_ct2(*epoch, ct2.clone(), mac) {
+                        spqr.add_epoch(&epoch_secret);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Data produced by `encrypt_pq` for sending over the wire.
+///
+/// Contains the encrypted message, optional SPQR metadata for combined-key
+/// decryption, and any Braid protocol messages for the peer.
+#[derive(Debug, Clone)]
+pub struct SpqrWireData {
+    /// The encrypted Olm message.
+    pub message: OlmMessage,
+    /// SPQR metadata (epoch/index) — None if SPQR not yet initialized.
+    pub spqr_meta: Option<SpqrMessageMeta>,
+    /// Braid protocol messages to send to the peer.
+    pub braid_msgs: Vec<BraidMessage>,
+}
+
+/// SPQR metadata attached to each encrypted message on the wire.
+///
+/// This tells the receiver which SPQR epoch and key index were used
+/// to combine the message key, so they can derive the same combined key.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct SpqrMessageMeta {
+    /// The SPQR epoch number (advances with each Braid key exchange).
+    pub epoch: u64,
+    /// The message index within the epoch's send chain.
+    pub index: u32,
+}
+
+
+#[cfg(test)]
+mod spqr_integration_tests {
+    use super::*;
+    use crate::olm::Account;
+
+    /// Helper: create a pure-vodozemac PQXDH session pair for testing SPQR.
+    fn create_pqxdh_session_pair() -> (Session, Session) {
+        let alice = Account::new();
+        let mut bob = Account::new();
+
+        let bob_otks = bob.generate_one_time_keys(1);
+        let bob_otk = bob_otks.created.first().expect("No OTK for Bob");
+        let bob_identity_key = bob.identity_keys().curve25519;
+
+        let mut alice_session = alice.create_outbound_session(
+            SessionConfig::version_1(),
+            bob_identity_key,
+            *bob_otk,
+        );
+
+        // Bootstrap session with a pre-key message
+        let bootstrap_msg = alice_session.encrypt("bootstrap");
+        let alice_identity_key = alice.identity_keys().curve25519;
+
+        match &bootstrap_msg {
+            OlmMessage::PreKey(prekey_msg) => {
+                let result = bob
+                    .create_inbound_session(alice_identity_key, prekey_msg)
+                    .expect("Bob could not create inbound session");
+                assert_eq!(result.plaintext, b"bootstrap");
+                (alice_session, result.session)
+            }
+            _ => panic!("First message should be PreKey"),
+        }
+    }
+
+    #[test]
+    fn classical_session_has_no_spqr() {
+        let (alice, bob) = create_pqxdh_session_pair();
+        // classical Olm sessions don't have SPQR
+        // (our test helper uses create_outbound_session which is non-PQXDH)
+        assert!(!alice.has_spqr());
+        assert!(!bob.has_spqr());
+    }
+
+    #[test]
+    fn spqr_state_initializes_correctly() {
+        // Direct test of SpqrState initialization
+        let state = SpqrState::new(
+            BraidRole::Initiator,
+            &[42u8; 32],
+            SpqrConfig::default(),
+        );
+        assert!(!state.initialized);
+        assert_eq!(state.current_epoch(), 0);
+    }
+
+    #[test]
+    fn spqr_combine_keys_deterministic() {
+        let dr_key = [1u8; 32];
+        let spqr_key = [2u8; 32];
+        let k1 = spqr::combine_keys(&dr_key, &spqr_key);
+        let k2 = spqr::combine_keys(&dr_key, &spqr_key);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn spqr_combine_keys_differs_with_different_inputs() {
+        let dr_key = [1u8; 32];
+        let spqr_key_a = [2u8; 32];
+        let spqr_key_b = [3u8; 32];
+        let k1 = spqr::combine_keys(&dr_key, &spqr_key_a);
+        let k2 = spqr::combine_keys(&dr_key, &spqr_key_b);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn session_pickle_preserves_spqr_none() {
+        let (session, _) = create_pqxdh_session_pair();
+        let pickle_key = [0u8; 32];
+        let pickle = session.pickle().encrypt(&pickle_key);
+        let decrypted = SessionPickle::from_encrypted(&pickle, &pickle_key)
+            .expect("Should decrypt pickle");
+        let restored = Session::from_pickle(decrypted);
+        assert_eq!(session.has_spqr(), restored.has_spqr());
+    }
+
+    #[test]
+    fn standard_encrypt_decrypt_still_works() {
+        let (mut alice, mut bob) = create_pqxdh_session_pair();
+
+        // Standard encrypt/decrypt should work regardless of SPQR
+        for i in 0..10 {
+            let plaintext = format!("message {}", i);
+            let msg = alice.encrypt(&plaintext);
+            let decrypted = bob.decrypt(&msg).expect("Bob should decrypt");
+            assert_eq!(decrypted, plaintext.as_bytes());
+        }
     }
 }

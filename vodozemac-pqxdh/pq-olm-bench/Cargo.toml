@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-vodozemac = { path = "/home/csnd1/vodozemac-pqxdh" }
+vodozemac = { path = ".." }
 oqs = "0.10"
 reqwest = { version = "0.11", features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }

@@ -68,6 +68,16 @@ impl MessageKey {
         Self { key, ratchet_key, index }
     }
 
+    /// Replace the internal key with a combined key for Triple Ratchet.
+    ///
+    /// This is used when the SPQR parallel ratchet is active: the original
+    /// DH-derived key is combined with an SPQR epoch key via HKDF, yielding
+    /// a key that requires compromise of BOTH ratchets.
+    pub fn with_combined_key(mut self, combined: Box<[u8; 32]>) -> Self {
+        self.key = combined;
+        self
+    }
+
     /// Encrypt the given plaintext using this [`MessageKey`].
     ///
     /// This method will authenticate the ciphertext using a 32-byte message
@@ -107,13 +117,12 @@ impl MessageKey {
     }
 
     /// Get a reference to the message key's raw 32-bytes.
-    #[cfg(feature = "low-level-api")]
     pub fn key(&self) -> &[u8; 32] {
         self.key.as_ref()
     }
 
     /// Get the message key's ratchet key.
-    #[cfg(feature = "low-level-api")]
+    #[allow(dead_code)]
     pub const fn ratchet_key(&self) -> RatchetPublicKey {
         self.ratchet_key
     }
@@ -132,6 +141,14 @@ impl RemoteMessageKey {
 
     pub const fn chain_index(&self) -> u64 {
         self.index
+    }
+
+    /// Replace the internal key with a combined key for Triple Ratchet.
+    ///
+    /// Used on the receiving side to combine the DH-derived key with an
+    /// SPQR epoch key before decryption.
+    pub fn with_combined_key(&mut self, combined: Box<[u8; 32]>) {
+        self.key = combined;
     }
 
     pub fn decrypt_truncated_mac(&self, message: &Message) -> Result<Vec<u8>, DecryptionError> {

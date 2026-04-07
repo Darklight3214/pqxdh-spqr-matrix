@@ -89,6 +89,31 @@ impl FoundMessageKey<'_> {
             Version::V2 => message_key.decrypt(message),
         }
     }
+
+    /// Decrypt with a combined DH+SPQR key for Triple Ratchet.
+    ///
+    /// Takes the raw SPQR key, combines it with the DH-derived message key
+    /// using `combine_keys()`, and uses the combined key for decryption.
+    fn decrypt_combined(
+        &self,
+        message: &Message,
+        config: &SessionConfig,
+        spqr_key: &[u8],
+    ) -> Result<Vec<u8>, DecryptionError> {
+        // Clone the message key and replace with combined key
+        let mut combined_mk = match self {
+            FoundMessageKey::Existing(m) => (*m).clone(),
+            FoundMessageKey::New(m) => m.2.clone(),
+        };
+        let dr_key: &[u8; 32] = combined_mk.key.as_ref();
+        let combined = super::spqr::combine_keys(dr_key, spqr_key);
+        combined_mk.with_combined_key(combined);
+
+        match config.version {
+            Version::V1 => combined_mk.decrypt_truncated_mac(message),
+            Version::V2 => combined_mk.decrypt(message),
+        }
+    }
 }
 
 impl<'a> Debug for FoundMessageKey<'a> {
@@ -202,6 +227,37 @@ impl ReceiverChain {
         let message_key = self.find_message_key(chain_index)?;
 
         let plaintext = message_key.decrypt(message, config)?;
+
+        match message_key {
+            FoundMessageKey::Existing(m) => {
+                let chain_index = m.chain_index();
+                self.skipped_message_keys.remove_message_key(chain_index)
+            }
+            FoundMessageKey::New(m) => {
+                let (ratchet, skipped_keys, _) = *m;
+
+                self.hkdf_ratchet = ratchet;
+                self.skipped_message_keys.merge(skipped_keys);
+            }
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Decrypt with Triple Ratchet key combination.
+    ///
+    /// The SPQR key is combined with the DH-derived message key before
+    /// AEAD decryption. This ensures both ratchets must be compromised.
+    pub fn decrypt_with_spqr_key(
+        &mut self,
+        message: &Message,
+        config: &SessionConfig,
+        spqr_key: &[u8],
+    ) -> Result<Vec<u8>, DecryptionError> {
+        let chain_index = message.chain_index;
+        let message_key = self.find_message_key(chain_index)?;
+
+        let plaintext = message_key.decrypt_combined(message, config, spqr_key)?;
 
         match message_key {
             FoundMessageKey::Existing(m) => {

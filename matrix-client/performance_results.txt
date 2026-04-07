@@ -1,0 +1,21 @@
+PQXDH PERFORMANCE TEST RESULTS
+================================================================================
+
+X3DH STATISTICS
+--------------------------------------------------------------------------------
+keygen_ms: mean=0.16ms, median=0.15ms, stdev=0.06ms
+initiate_ms: mean=0.41ms, median=0.36ms, stdev=0.36ms
+complete_ms: mean=0.22ms, median=0.21ms, stdev=0.07ms
+total_ms: mean=0.79ms, median=0.76ms, stdev=0.39ms
+
+PQXDH STATISTICS
+--------------------------------------------------------------------------------
+keygen_ms: mean=0.74ms, median=0.42ms, stdev=1.71ms
+initiate_ms: mean=0.71ms, median=0.69ms, stdev=0.10ms
+complete_ms: mean=0.71ms, median=0.48ms, stdev=1.49ms
+total_ms: mean=2.16ms, median=1.59ms, stdev=2.30ms
+
+COMPARISON
+--------------------------------------------------------------------------------
+Total overhead: 1.38 ms
+Overhead factor: 2.75x

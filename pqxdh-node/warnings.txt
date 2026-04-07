@@ -1,0 +1,43 @@
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:33:12: warning: unused imports: `CryptoRng` and `Rng`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/mod.rs:36:36: warning: unused import: `Direction`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:194:16: warning: type `HeaderSent` is more private than the item `BraidState::HeaderSent::0`: field `BraidState::HeaderSent::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:195:12: warning: type `EkSent` is more private than the item `BraidState::EkSent::0`: field `BraidState::EkSent::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:196:23: warning: type `EkSentCt1Received` is more private than the item `BraidState::EkSentCt1Received::0`: field `BraidState::EkSentCt1Received::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:200:20: warning: type `HeaderReceived` is more private than the item `BraidState::HeaderReceived::0`: field `BraidState::HeaderReceived::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:201:13: warning: type `Ct1Sent` is more private than the item `BraidState::Ct1Sent::0`: field `BraidState::Ct1Sent::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:202:23: warning: type `Ct1SentEkReceived` is more private than the item `BraidState::Ct1SentEkReceived::0`: field `BraidState::Ct1SentEkReceived::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/braid.rs:203:13: warning: type `Ct2Sent` is more private than the item `BraidState::Ct2Sent::0`: field `BraidState::Ct2Sent::0` is reachable at visibility `pub`
+/home/csnd1/vodozemac-pqxdh/src/olm/account/mod.rs:174:19: warning: method `signed_prekey_secret` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/session/message_key.rs:125:18: warning: method `ratchet_key` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/authenticator.rs:26:11: warning: constant `MAC_SIZE` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/authenticator.rs:29:10: warning: type alias `MacTag` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/authenticator.rs:58:12: warning: associated function `with_key` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/session/spqr/incremental_mlkem768.rs:42:11: warning: constant `DECAPSULATION_KEY_SIZE` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/shared_secret.rs:197:12: warning: method `associated_data` is never used
+/home/csnd1/vodozemac-pqxdh/src/olm/shared_secret.rs:259:12: warning: method `associated_data` is never used
+warning: `vodozemac` (lib) generated 17 warnings (run `cargo fix --lib -p vodozemac` to apply 2 suggestions)
+    Checking pqxdh-node v0.1.0 (/home/csnd1/pqxdh-node)
+warning: unused import: `SpqrWireData`
+ --> src/main.rs:9:97
+  |
+9 | ...Message, Session, SessionPickle, SpqrWireData, SpqrMessageMeta, BraidMessage};
+  |                                     ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `msg_counter`
+   --> src/main.rs:440:19
+    |
+440 |     ik_b64: &str, msg_counter: &AtomicU64,
+    |                   ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_msg_counter`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `recv_kem_sk`
+   --> src/main.rs:794:9
+    |
+794 |     let recv_kem_sk = kem_sk.clone();
+    |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_recv_kem_sk`
+
+warning: `pqxdh-node` (bin "pqxdh-node") generated 3 warnings (run `cargo fix --bin "pqxdh-node" -p pqxdh-node` to apply 3 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.01s

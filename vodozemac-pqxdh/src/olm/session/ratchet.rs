@@ -140,15 +140,6 @@ impl Ratchet {
         (remote_root_key, remote_chain_key)
     }
 
-
-    /// Advance with optional PQ secret mixed into root key (SPQR)
-    pub fn advance_with_pq(
-        &self,
-        remote_key: RemoteRatchetKey,
-        pq_secret: Option<&[u8]>,
-    ) -> (RemoteRootKey, RemoteChainKey) {
-        self.root_key.advance_with_pq(&self.ratchet_key, &remote_key, pq_secret)
-    }
     pub const fn ratchet_key(&self) -> &RatchetKey {
         &self.ratchet_key
     }

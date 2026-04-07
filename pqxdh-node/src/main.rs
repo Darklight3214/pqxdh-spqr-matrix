@@ -6,14 +6,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
-use vodozemac::olm::{Account, AccountPickle, SessionConfig, OlmMessage, Session, SessionPickle};
+use vodozemac::olm::{Account, AccountPickle, SessionConfig, OlmMessage, Session, SessionPickle, SpqrMessageMeta, BraidMessage};
 use oqs::kem::{Kem, Algorithm};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
 const CONDUIT: &str = "http://172.16.200.86:6167";
-const PICKLE_KEY: [u8; 32] = [0u8; 32];
 const SPK_ROTATION_DAYS: u64 = 7;
-const SPQR_INTERVAL: u64 = 50;
+
+fn derive_pickle_key(password: &str, username: &str) -> [u8; 32] {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let hkdf: Hkdf<Sha256> = Hkdf::new(Some(username.as_bytes()), password.as_bytes());
+    let mut key = [0u8; 32];
+    hkdf.expand(b"pqxdh-node-pickle-key", &mut key).expect("HKDF expand failed");
+    key
+}
 
 fn prompt(label: &str) -> String {
     print!("{}", label);
@@ -377,14 +384,14 @@ fn create_room(http: &reqwest::blocking::Client, tok: &str, invite: &str) -> Str
 fn send_encrypted(
     http: &reqwest::blocking::Client, tok: &str, room: &str,
     session: &mut Session, plaintext: &str, sender_key: &str,
-    kem_ct: Option<&[u8]>, msg_counter: &AtomicU64,
+    kem_ct: Option<&[u8]>,
+    pending_braid: &mut Vec<BraidMessage>,
 ) {
-    let (encrypted, spqr_kem_ct) = session.encrypt_pq(plaintext);
+    // Inject any pending Braid response messages into the session before encrypting
+    // (they'll be piggybacked on this outgoing message)
+    let wire = session.encrypt_pq(plaintext);
 
-    let count = msg_counter.fetch_add(1, Ordering::Relaxed) + 1;
-    let next_pq = SPQR_INTERVAL - (count % SPQR_INTERVAL);
-
-    let (msg_type, ct_bytes) = match &encrypted {
+    let (msg_type, ct_bytes) = match &wire.message {
         OlmMessage::PreKey(m) => (0u8, m.to_bytes()),
         OlmMessage::Normal(m) => (1u8, m.to_bytes()),
     };
@@ -400,11 +407,20 @@ fn send_encrypted(
         payload["kem_ciphertext"] = json!(B64.encode(ct));
     }
 
-    if let Some(ref spqr_ct) = spqr_kem_ct {
-        payload["spqr_kem_ct"] = json!(B64.encode(spqr_ct));
-        println!("[spqr] *** PQ RATCHET STEP at message {} *** KEM ct: {} bytes", count, spqr_ct.len());
-    } else if count % 10 == 0 {
-        println!("[spqr] Message {} sent (next PQ step in {} messages)", count, next_pq);
+    // Add SPQR metadata (epoch/index for combined key decryption)
+    if let Some(ref meta) = wire.spqr_meta {
+        payload["spqr_meta"] = serde_json::to_value(meta).unwrap_or_default();
+    }
+
+    // Add Braid protocol messages (from encrypt_pq auto-advance + pending responses)
+    let mut all_braid = wire.braid_msgs;
+    all_braid.append(pending_braid);
+    if !all_braid.is_empty() {
+        payload["braid_msgs"] = serde_json::to_value(&all_braid).unwrap_or_default();
+    }
+
+    if session.has_spqr() {
+        payload["spqr"] = json!(true);
     }
 
     if let Err(e) = http.put(format!(
@@ -421,7 +437,7 @@ fn send_encrypted(
 fn initiate_session(
     http: &reqwest::blocking::Client, tok: &str,
     account: &mut Account, peer: &str, first_message: &str,
-    ik_b64: &str, msg_counter: &AtomicU64,
+    ik_b64: &str, _msg_counter: &AtomicU64,
 ) -> (Session, String) {
     println!("[pqxdh] Initiating session with {}...", peer);
 
@@ -470,7 +486,7 @@ fn initiate_session(
     let room_id = create_room(http, tok, peer);
     println!("[room] Created: {}", room_id);
 
-    send_encrypted(http, tok, &room_id, &mut session, first_message, ik_b64, Some(&kem_ct), msg_counter);
+    send_encrypted(http, tok, &room_id, &mut session, first_message, ik_b64, Some(&kem_ct), &mut Vec::new());
     println!("[sent] \"{}\"", first_message);
 
     (session, room_id)
@@ -482,7 +498,7 @@ fn try_decrypt_events(
     account: &mut Account,
     kem_sk: &[u8],
     scanned: &mut HashSet<String>,
-) -> Option<(Session, String)> {
+) -> Option<(Session, String, Vec<BraidMessage>)> {
     for evt in events {
         let event_id = evt["event_id"].as_str().unwrap_or("");
         if !event_id.is_empty() {
@@ -526,7 +542,20 @@ fn try_decrypt_events(
                     println!("[pqxdh] Session established");
                     println!("[pqxdh] Decrypted: \"{}\"", pt);
                     println!("[pqxdh] Protocol: 4x X25519 + ML-KEM-768 + SPQR");
-                    return Some((result.session, sender.to_string()));
+
+                    // Process Braid messages piggybacked on the PreKey event
+                    // to bootstrap the SPQR epoch exchange
+                    let braid_msgs: Vec<BraidMessage> = content.get("braid_msgs")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    let mut session = result.session;
+                    let response_braid = session.process_braid_messages(&braid_msgs);
+                    if !braid_msgs.is_empty() {
+                        println!("[spqr] Processed {} Braid message(s) from PreKey, {} response(s)",
+                            braid_msgs.len(), response_braid.len());
+                    }
+
+                    return Some((session, sender.to_string(), response_braid));
                 }
                 Err(e) => {
                     println!("[error] PQXDH session failed: {:?}", e);
@@ -544,12 +573,12 @@ fn try_decrypt_sync(
     account: &mut Account,
     kem_sk: &[u8],
     scanned: &mut HashSet<String>,
-) -> Option<(Session, String, String)> {
+) -> Option<(Session, String, String, Vec<BraidMessage>)> {
     let rooms = r["rooms"]["join"].as_object()?;
     for (rid, rd) in rooms {
         if let Some(evts) = rd["timeline"]["events"].as_array() {
-            if let Some((session, sender)) = try_decrypt_events(evts, uid, account, kem_sk, scanned) {
-                return Some((session, rid.clone(), sender));
+            if let Some((session, sender, braid_resp)) = try_decrypt_events(evts, uid, account, kem_sk, scanned) {
+                return Some((session, rid.clone(), sender, braid_resp));
             }
         }
     }
@@ -559,17 +588,11 @@ fn try_decrypt_sync(
 fn wait_for_session(
     http: &reqwest::blocking::Client, tok: &str, uid: &str,
     account: &mut Account, kem_sk: &[u8],
-    initial_since: Option<String>,
-) -> (Session, String, String) {
+) -> (Session, String, String, Vec<BraidMessage>) {
     println!("[wait] Listening for incoming PQXDH session...");
 
-    let mut since = match None::<String> { // FORCE FRESH SYNC
-        Some(s) => Some(s),
-        None => {
-            let r = sync(http, tok, None, 1000);
-            r["next_batch"].as_str().map(|s| s.to_string())
-        }
-    };
+    let r = sync(http, tok, None, 1000);
+    let mut since = r["next_batch"].as_str().map(|s| s.to_string());
 
     let mut joined_rooms: HashSet<String> = HashSet::new();
     let mut scanned_messages: HashSet<String> = HashSet::new();
@@ -620,8 +643,8 @@ fn wait_for_session(
                     Err(_) => continue,
                 };
                 if let Some(evts) = msgs["chunk"].as_array() {
-                    if let Some((session, sender)) = try_decrypt_events(evts, uid, account, kem_sk, &mut scanned_messages) {
-                        return (session, rid.clone(), sender);
+                    if let Some((session, sender, braid_resp)) = try_decrypt_events(evts, uid, account, kem_sk, &mut scanned_messages) {
+                        return (session, rid.clone(), sender, braid_resp);
                     }
                 }
             }
@@ -665,8 +688,8 @@ fn clear_history(username: &str) {
 
 // ========== SESSION PERSISTENCE ==========
 
-fn save_session_data(username: &str, session: &Session, room_id: &str, peer_uid: &str, msg_count: u64) {
-    let pickle = session.pickle().encrypt(&PICKLE_KEY);
+fn save_session_data(username: &str, session: &Session, room_id: &str, peer_uid: &str, msg_count: u64, pickle_key: &[u8; 32]) {
+    let pickle = session.pickle().encrypt(pickle_key);
     let data = json!({
         "session_pickle": pickle,
         "room_id": room_id,
@@ -678,13 +701,13 @@ fn save_session_data(username: &str, session: &Session, room_id: &str, peer_uid:
     println!("[session] Saved to {}", path);
 }
 
-fn load_session_data(username: &str) -> Option<(Session, String, String, u64)> {
+fn load_session_data(username: &str, pickle_key: &[u8; 32]) -> Option<(Session, String, String, u64)> {
     let path = format!(".pqxdh-{}.session", username);
     if !Path::new(&path).exists() { return None; }
     let raw = fs::read_to_string(&path).ok()?;
     let data: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let pickle_str = data["session_pickle"].as_str()?;
-    let pickle = SessionPickle::from_encrypted(pickle_str, &PICKLE_KEY).ok()?;
+    let pickle = SessionPickle::from_encrypted(pickle_str, pickle_key).ok()?;
     let session = Session::from_pickle(pickle);
     let room_id = data["room_id"].as_str()?.to_string();
     let peer_uid = data["peer_uid"].as_str()?.to_string();
@@ -706,16 +729,17 @@ fn delete_session_data(username: &str) {
 fn chat_loop(
     http: &reqwest::blocking::Client, tok: &str, uid: &str,
     session: Arc<Mutex<Session>>, room_id: &str, sender_key: &str,
-    kem_sk: Arc<Vec<u8>>, username: &str, peer_uid: &str,
-    msg_counter: Arc<AtomicU64>,
+    _kem_sk: Arc<Vec<u8>>, username: &str, peer_uid: &str,
+    msg_counter: Arc<AtomicU64>, pickle_key: [u8; 32],
+    initial_braid: Arc<Mutex<Vec<BraidMessage>>>,
 ) -> bool {
-    let count = msg_counter.load(Ordering::Relaxed);
-    let next_pq = SPQR_INTERVAL - (count % SPQR_INTERVAL);
+    let has_spqr = session.lock().unwrap().has_spqr();
 
     println!("\n========================================");
-    println!("  PQXDH + SPQR Encrypted Chat");
-    println!("  PQ ratchet every {} messages", SPQR_INTERVAL);
-    println!("  Messages sent: {} (next PQ in {})", count, next_pq);
+    println!("  PQXDH Encrypted Chat");
+    if has_spqr {
+        println!("  SPQR post-quantum protection: ACTIVE");
+    }
     println!("  Room: {}", room_id);
     println!("  Peer: {}", peer_uid);
     println!("  /logout - switch account (session saved)");
@@ -728,6 +752,14 @@ fn chat_loop(
 
     let initial = sync(http, tok, None, 500);
 
+    let mut scanned_messages: HashSet<String> = HashSet::new();
+
+    let pending_braid: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new({
+        // Seed with any Braid responses from the initial PreKey processing
+        let mut initial = initial_braid.lock().unwrap().drain(..).collect::<Vec<_>>();
+        initial
+    }));
+
     // Backfill missed messages
     {
         let mut sess = session.lock().unwrap();
@@ -736,6 +768,12 @@ fn chat_loop(
             if let Some(rd) = rooms.get(room_id) {
                 if let Some(evts) = rd["timeline"]["events"].as_array() {
                     for evt in evts {
+                        let event_id = evt["event_id"].as_str().unwrap_or("");
+                        if !event_id.is_empty() {
+                            if scanned_messages.contains(event_id) { continue; }
+                            scanned_messages.insert(event_id.to_string());
+                        }
+                        
                         let sender = evt["sender"].as_str().unwrap_or("");
                         if sender == uid { continue; }
                         if evt["type"].as_str() != Some("m.room.encrypted") { continue; }
@@ -748,11 +786,18 @@ fn chat_loop(
                         let ct = match B64.decode(ct_b64) { Ok(b) => b, Err(_) => continue };
                         let olm = match OlmMessage::from_parts(msg_type, &ct) { Ok(m) => m, Err(_) => continue };
 
-                        let spqr_ct: Option<Vec<u8>> = content["spqr_kem_ct"]
-                            .as_str().and_then(|s| B64.decode(s).ok());
+                        // Parse SPQR metadata and Braid messages from event
+                        let spqr_meta: Option<SpqrMessageMeta> = content.get("spqr_meta")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        let braid_msgs: Vec<BraidMessage> = content.get("braid_msgs")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            .unwrap_or_default();
 
-                        match sess.decrypt_pq(&olm, spqr_ct.as_deref(), Some(&kem_sk)) {
-                            Ok(pt) => {
+                        match sess.decrypt_pq(&olm, spqr_meta.as_ref(), &braid_msgs) {
+                            Ok((pt, response_braid)) => {
+                                if !response_braid.is_empty() {
+                                    pending_braid.lock().unwrap().extend(response_braid);
+                                }
                                 let txt = String::from_utf8_lossy(&pt);
                                 println!("[missed] {}: {}", sender, txt);
                                 append_history(username, sender, &txt);
@@ -777,58 +822,76 @@ fn chat_loop(
     let recv_uid = uid.to_string();
     let recv_session = session.clone();
     let recv_since = since.clone();
-    let recv_kem_sk = kem_sk.clone();
     let recv_username = username.to_string();
     let recv_room_id = room_id.to_string();
 
     let running = Arc::new(Mutex::new(true));
     let running_clone = running.clone();
+    let sync_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let sync_error_clone = sync_error.clone();
+    
+    let scanned_messages_arc = Arc::new(Mutex::new(scanned_messages));
+    let scanned_clone = scanned_messages_arc.clone();
+
+    let pending_braid_clone = pending_braid.clone();
 
     let handle = std::thread::spawn(move || {
-        let http = reqwest::blocking::Client::new();
-        while *running_clone.lock().unwrap() {
-            let since_val = recv_since.lock().unwrap().clone();
-            let r = sync(&http, &recv_tok, since_val.as_deref(), 5000);
-            *recv_since.lock().unwrap() = r["next_batch"].as_str().map(|s| s.to_string());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let http = reqwest::blocking::Client::new();
+            while *running_clone.lock().unwrap() {
+                let since_val = recv_since.lock().unwrap().clone();
+                let r = sync(&http, &recv_tok, since_val.as_deref(), 5000);
+                *recv_since.lock().unwrap() = r["next_batch"].as_str().map(|s| s.to_string());
 
-            if let Some(rooms) = r["rooms"]["join"].as_object() {
-                for (rid, rd) in rooms { if rid != &recv_room_id { continue; }
-                    if let Some(evts) = rd["timeline"]["events"].as_array() {
-                        for evt in evts {
-                            let sender = evt["sender"].as_str().unwrap_or("");
-                            if sender == recv_uid { continue; }
-                            if evt["type"].as_str() != Some("m.room.encrypted") { continue; }
-
-                            let content = &evt["content"];
-                            let ct_b64 = content["ciphertext"].as_str().unwrap_or("");
-                            let msg_type = content["type"].as_u64().unwrap_or(1) as usize;
-                            if ct_b64.is_empty() { continue; }
-
-                            let ct = match B64.decode(ct_b64) { Ok(b) => b, Err(_) => continue };
-                            let olm = match OlmMessage::from_parts(msg_type, &ct) { Ok(m) => m, Err(_) => continue };
-
-                            let spqr_ct: Option<Vec<u8>> = content["spqr_kem_ct"]
-                                .as_str().and_then(|s| B64.decode(s).ok());
-
-                            if spqr_ct.is_some() {
-                                println!("\r[spqr] Received PQ ratchet step from {}", sender);
-                            }
-
-                            let mut sess = recv_session.lock().unwrap();
-
-                            match sess.decrypt_pq(&olm, spqr_ct.as_deref(), Some(&recv_kem_sk)) {
-                                Ok(pt) => {
-                                    let txt = String::from_utf8_lossy(&pt);
-                                    println!("\r{}: {}", sender, txt);
-                                    append_history(&recv_username, sender, &txt);
-                                    print!("> ");
-                                    io::stdout().flush().ok();
+                if let Some(rooms) = r["rooms"]["join"].as_object() {
+                    for (rid, rd) in rooms { if rid != &recv_room_id { continue; }
+                        if let Some(evts) = rd["timeline"]["events"].as_array() {
+                            for evt in evts {
+                                let event_id = evt["event_id"].as_str().unwrap_or("");
+                                if !event_id.is_empty() {
+                                    let mut scanned = scanned_clone.lock().unwrap();
+                                    if scanned.contains(event_id) { continue; }
+                                    scanned.insert(event_id.to_string());
                                 }
-                                Err(e) => {
-                                    if msg_type == 0 {
-                                        println!("\r[warn] Unexpected PreKey from {} (peer restarted?)", sender);
-                                    } else {
-                                        println!("\r[error] Decrypt failed: {:?}", e);
+                                
+                                let sender = evt["sender"].as_str().unwrap_or("");
+                                if sender == recv_uid { continue; }
+                                if evt["type"].as_str() != Some("m.room.encrypted") { continue; }
+
+                                let content = &evt["content"];
+                                let ct_b64 = content["ciphertext"].as_str().unwrap_or("");
+                                let msg_type = content["type"].as_u64().unwrap_or(1) as usize;
+                                if ct_b64.is_empty() { continue; }
+
+                                let ct = match B64.decode(ct_b64) { Ok(b) => b, Err(_) => continue };
+                                let olm = match OlmMessage::from_parts(msg_type, &ct) { Ok(m) => m, Err(_) => continue };
+
+                                // Parse SPQR metadata and Braid messages from event
+                                let spqr_meta: Option<SpqrMessageMeta> = content.get("spqr_meta")
+                                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                                let braid_msgs: Vec<BraidMessage> = content.get("braid_msgs")
+                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                    .unwrap_or_default();
+
+                                let mut sess = recv_session.lock().unwrap();
+
+                                match sess.decrypt_pq(&olm, spqr_meta.as_ref(), &braid_msgs) {
+                                    Ok((pt, response_braid)) => {
+                                        let txt = String::from_utf8_lossy(&pt);
+                                        if !response_braid.is_empty() {
+                                            pending_braid_clone.lock().unwrap().extend(response_braid);
+                                        }
+                                        println!("\r{}: {}", sender, txt);
+                                        append_history(&recv_username, sender, &txt);
+                                        print!("> ");
+                                        io::stdout().flush().ok();
+                                    }
+                                    Err(e) => {
+                                        if msg_type == 0 {
+                                            println!("\r[warn] Unexpected PreKey from {} (peer restarted?)", sender);
+                                        } else {
+                                            println!("\r[error] Decrypt failed: {:?}", e);
+                                        }
                                     }
                                 }
                             }
@@ -836,6 +899,18 @@ fn chat_loop(
                     }
                 }
             }
+        }));
+
+        if let Err(panic_info) = result {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            *sync_error_clone.lock().unwrap() = Some(format!("Sync thread panicked: {}", msg));
+            *running_clone.lock().unwrap() = false;
         }
     });
 
@@ -847,6 +922,13 @@ fn chat_loop(
     let mut new_requested = false;
 
     let result = loop {
+        // Check if background sync thread has crashed
+        if let Some(err) = sync_error.lock().unwrap().as_ref() {
+            println!("\n[error] {}", err);
+            println!("[error] Background sync has stopped. Saving session and exiting.");
+            break true;
+        }
+
         print!("> ");
         io::stdout().flush().unwrap();
 
@@ -869,6 +951,12 @@ fn chat_loop(
 
         if line == "/new" {
             delete_session_data(&username_owned);
+            // Also clear the state file so next login starts fresh
+            let state_path = format!(".pqxdh-{}.state", username_owned);
+            if Path::new(&state_path).exists() {
+                let _ = fs::remove_file(&state_path);
+                println!("[state] Cleared");
+            }
             clear_history(&username_owned);
             new_requested = true;
             break true;
@@ -877,7 +965,8 @@ fn chat_loop(
         if line.is_empty() { continue; }
 
         let mut sess = session.lock().unwrap();
-        send_encrypted(http, tok, &room_id_owned, &mut sess, line, &sender_key_owned, None, &msg_counter);
+        let mut braid_to_send: Vec<BraidMessage> = pending_braid.lock().unwrap().drain(..).collect();
+        send_encrypted(http, tok, &room_id_owned, &mut sess, line, &sender_key_owned, None, &mut braid_to_send);
         append_history(&username_owned, &uid_owned, line);
     };
 
@@ -886,7 +975,7 @@ fn chat_loop(
 
     if !new_requested {
         let sess = session.lock().unwrap();
-        save_session_data(&username_owned, &sess, &room_id_owned, &peer_uid_owned, msg_counter.load(Ordering::Relaxed));
+        save_session_data(&username_owned, &sess, &room_id_owned, &peer_uid_owned, msg_counter.load(Ordering::Relaxed), &pickle_key);
     }
 
     result
@@ -894,8 +983,8 @@ fn chat_loop(
 
 // ========== STATE PERSISTENCE ==========
 
-fn save_state(username: &str, account: &Account, kem_pk: &[u8], kem_sk: &[u8], spk_created: u64, device_id: &str) {
-    let pickle = account.pickle().encrypt(&PICKLE_KEY);
+fn save_state(username: &str, account: &Account, kem_pk: &[u8], kem_sk: &[u8], spk_created: u64, device_id: &str, pickle_key: &[u8; 32]) {
+    let pickle = account.pickle().encrypt(pickle_key);
     let state = json!({
         "account_pickle": pickle,
         "kem_pk": B64.encode(kem_pk),
@@ -909,7 +998,7 @@ fn save_state(username: &str, account: &Account, kem_pk: &[u8], kem_sk: &[u8], s
     println!("[state] Saved to {}", path);
 }
 
-fn load_state(username: &str) -> Option<(Account, Vec<u8>, Vec<u8>, u64, bool, String)> {
+fn load_state(username: &str, pickle_key: &[u8; 32]) -> Option<(Account, Vec<u8>, Vec<u8>, u64, bool, String)> {
     let path = format!(".pqxdh-{}.state", username);
     if !Path::new(&path).exists() {
         return None;
@@ -918,7 +1007,7 @@ fn load_state(username: &str) -> Option<(Account, Vec<u8>, Vec<u8>, u64, bool, S
     let data: serde_json::Value = serde_json::from_str(&raw).ok()?;
 
     let pickle_str = data["account_pickle"].as_str()?;
-    let pickle = AccountPickle::from_encrypted(pickle_str, &PICKLE_KEY).ok()?;
+    let pickle = AccountPickle::from_encrypted(pickle_str, pickle_key).ok()?;
     let account = Account::from_pickle(pickle);
     let kem_pk = B64.decode(data["kem_pk"].as_str()?).ok()?;
     let kem_sk = B64.decode(data["kem_sk"].as_str()?).ok()?;
@@ -935,7 +1024,37 @@ fn load_state(username: &str) -> Option<(Account, Vec<u8>, Vec<u8>, u64, bool, S
     Some((account, kem_pk, kem_sk, spk_created, needs_rotation, device_id))
 }
 
+
+// ========== INITIATOR HELPER ==========
+
+fn run_initiator_flow(
+    http: &reqwest::blocking::Client, tok: &str, uid: &str,
+    account: &mut Account, peer: &str, ik_b64: &str,
+    kem_sk_arc: Arc<Vec<u8>>, kem_pk_bytes: &[u8], kem_sk_bytes: &[u8],
+    username: &str, spk_created: u64, did: &str, pickle_key: [u8; 32],
+) -> bool {
+    println!("\n[role] INITIATOR");
+    print!("> ");
+    io::stdout().flush().unwrap();
+
+    let mut first_msg = String::new();
+    io::stdin().read_line(&mut first_msg).unwrap();
+    let first_msg = first_msg.trim().to_string();
+    if first_msg == "/logout" { matrix_logout(http, tok); return true; }
+    if first_msg == "/exit" { matrix_logout(http, tok); return false; }
+
+    let msg_counter = Arc::new(AtomicU64::new(0));
+    let (session, room_id) = initiate_session(
+        http, tok, account, peer, &first_msg, ik_b64, &msg_counter,
+    );
+    append_history(username, uid, &first_msg);
+    save_state(username, account, kem_pk_bytes, kem_sk_bytes, spk_created, did, &pickle_key);
+    let session_arc = Arc::new(Mutex::new(session));
+    chat_loop(http, tok, uid, session_arc, &room_id, ik_b64, kem_sk_arc, username, peer, msg_counter, pickle_key, Arc::new(Mutex::new(Vec::new())))
+}
+
 // ========== MAIN SESSION LOGIC ==========
+
 
 #[derive(Clone, Copy)]
 enum StartMode {
@@ -948,7 +1067,9 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
     let username = prompt("Username: ");
     let password = prompt("Password: ");
 
-    let state_result = load_state(&username);
+    let pickle_key = derive_pickle_key(&password, &username);
+
+    let state_result = load_state(&username, &pickle_key);
 
     let start_mode = match &state_result {
         None => StartMode::Fresh,
@@ -1002,7 +1123,7 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
             cleanup_old_devices(http, &tok, &did, &username, &password);
 
             let now = current_timestamp();
-            save_state(&username, &acct, &pk, &sk, now, &did);
+            save_state(&username, &acct, &pk, &sk, now, &did, &pickle_key);
             (acct, pk, sk, now)
         }
         StartMode::Rotate => {
@@ -1023,7 +1144,7 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
             cleanup_old_devices(http, &tok, &did, &username, &password);
 
             let now = current_timestamp();
-            save_state(&username, &acct, &pk, &sk, now, &did);
+            save_state(&username, &acct, &pk, &sk, now, &did, &pickle_key);
             (acct, pk, sk, now)
         }
         StartMode::Restore => {
@@ -1033,7 +1154,7 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
             let mut acct = acct;
             upload_otks_only(http, &tok, &mut acct);
             verify_own_keys(http, &tok, &uid, &did, &acct);
-            save_state(&username, &acct, &pk, &sk, spk_ts, &did);
+            save_state(&username, &acct, &pk, &sk, spk_ts, &did, &pickle_key);
             (acct, pk, sk, spk_ts)
         }
     };
@@ -1042,30 +1163,31 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
     let kem_sk_arc = Arc::new(kem_sk_bytes.clone());
 
     // Check for saved session FIRST (resume previous chat)
-    if let Some((restored_session, saved_room_id, saved_peer, saved_count)) = load_session_data(&username) {
-        println!("[info] Resuming chat with {}", saved_peer);
-        let msg_counter = Arc::new(AtomicU64::new(saved_count));
-        let session_arc = Arc::new(Mutex::new(restored_session));
-        let login_again = chat_loop(
-            http, &tok, &uid, session_arc, &saved_room_id, &ik_b64,
-            kem_sk_arc, &username, &saved_peer, msg_counter,
-        );
-        matrix_logout(http, &tok);
-        return login_again;
+    if let Some((restored_session, saved_room_id, saved_peer, saved_count)) = load_session_data(&username, &pickle_key) {
+        let p = prompt(&format!("\nResume chat with {}? [Y/n]: ", saved_peer));
+        if p.trim().eq_ignore_ascii_case("y") || p.trim().is_empty() {
+            println!("[info] Resuming chat with {}", saved_peer);
+            let msg_counter = Arc::new(AtomicU64::new(saved_count));
+            let session_arc = Arc::new(Mutex::new(restored_session));
+            let login_again = chat_loop(
+                http, &tok, &uid, session_arc, &saved_room_id, &ik_b64,
+                kem_sk_arc, &username, &saved_peer, msg_counter, pickle_key,
+                Arc::new(Mutex::new(Vec::new())),
+            );
+            matrix_logout(http, &tok);
+            return login_again;
+        } else {
+            println!("[info] Discarding saved session.");
+            delete_session_data(&username);
+        }
     }
 
     // No saved session - determine peer and role
-    let peer = if false {
-        "@bob:matrix.local".to_string()
-    } else if uid.starts_with("@bob:") {
-        "@alice:matrix.local".to_string()
-    } else {
-        { let p = prompt("\nChat with: "); if p.starts_with("@") { p } else { format!("@{}:matrix.local", p) } }
+    let peer = {
+        let p = prompt("\nChat with: ");
+        if p.starts_with("@") { p } else { format!("@{}:matrix.local", p) }
     };
     println!("[info] Peer: {}", peer);
-
-    let initial_sync = sync(http, &tok, None, 1000);
-    let since_token: Option<String> = initial_sync["next_batch"].as_str().map(|s| s.to_string());
 
     let peer_ready = query_keys(http, &tok, &peer).is_ok();
 
@@ -1078,34 +1200,20 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
         match choice.to_lowercase().as_str() {
             "w" => {
                 println!("\n[role] RESPONDER - waiting for {}...", peer);
-                let (session, room_id, _sender) = wait_for_session(
-                    http, &tok, &uid, &mut account, &kem_sk_bytes, since_token,
+                let (session, room_id, _sender, initial_braid) = wait_for_session(
+                    http, &tok, &uid, &mut account, &kem_sk_bytes,
                 );
-                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did);
+                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
                 let msg_counter = Arc::new(AtomicU64::new(0));
                 let session_arc = Arc::new(Mutex::new(session));
-                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter)
+                let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
+                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
             }
-            _ => {
-                println!("\n[role] INITIATOR");
-                print!("> ");
-                io::stdout().flush().unwrap();
-
-                let mut first_msg = String::new();
-                io::stdin().read_line(&mut first_msg).unwrap();
-                let first_msg = first_msg.trim().to_string();
-                if first_msg == "/logout" { matrix_logout(http, &tok); return true; }
-                if first_msg == "/exit" { matrix_logout(http, &tok); return false; }
-
-                let msg_counter = Arc::new(AtomicU64::new(0));
-                let (session, room_id) = initiate_session(
-                    http, &tok, &mut account, &peer, &first_msg, &ik_b64, &msg_counter,
-                );
-                append_history(&username, &uid, &first_msg);
-                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did);
-                let session_arc = Arc::new(Mutex::new(session));
-                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter)
-            }
+            _ => run_initiator_flow(
+                http, &tok, &uid, &mut account, &peer, &ik_b64,
+                kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
+                &username, spk_created, &did, pickle_key,
+            ),
         }
     } else {
         println!("\n[info] {} hasn't uploaded keys yet.", peer);
@@ -1123,36 +1231,24 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
                     io::stdout().flush().ok();
                     if query_keys(http, &tok, &peer).is_ok() {
                         println!("\n[info] {} ready!", peer);
-                        println!("\n[role] INITIATOR");
-                        print!("> ");
-                        io::stdout().flush().unwrap();
-
-                        let mut first_msg = String::new();
-                        io::stdin().read_line(&mut first_msg).unwrap();
-                        let first_msg = first_msg.trim().to_string();
-                        if first_msg == "/logout" { matrix_logout(http, &tok); return true; }
-                        if first_msg == "/exit" { matrix_logout(http, &tok); return false; }
-
-                        let msg_counter = Arc::new(AtomicU64::new(0));
-                        let (session, room_id) = initiate_session(
-                            http, &tok, &mut account, &peer, &first_msg, &ik_b64, &msg_counter,
+                        return run_initiator_flow(
+                            http, &tok, &uid, &mut account, &peer, &ik_b64,
+                            kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
+                            &username, spk_created, &did, pickle_key,
                         );
-                        append_history(&username, &uid, &first_msg);
-                        save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did);
-                        let session_arc = Arc::new(Mutex::new(session));
-                        return chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter);
                     }
                 }
             }
             _ => {
                 println!("\n[role] RESPONDER");
-                let (session, room_id, _) = wait_for_session(
-                    http, &tok, &uid, &mut account, &kem_sk_bytes, since_token,
+                let (session, room_id, _, initial_braid) = wait_for_session(
+                    http, &tok, &uid, &mut account, &kem_sk_bytes,
                 );
-                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did);
+                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
                 let msg_counter = Arc::new(AtomicU64::new(0));
                 let session_arc = Arc::new(Mutex::new(session));
-                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter)
+                let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
+                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
             }
         }
     };
