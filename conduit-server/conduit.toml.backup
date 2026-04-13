@@ -1,0 +1,22 @@
+[global]
+server_name = "matrix.local"
+
+database_backend = "rocksdb"
+database_path = "/var/lib/matrix-conduit/"
+
+port = 6167
+address = "0.0.0.0"
+
+max_request_size = 20_000_000
+
+allow_registration = true
+registration_token = "pqxdh-secret-token"
+
+allow_check_for_updates = false
+allow_federation = false
+
+enable_lightning_bolt = false
+
+trusted_servers = ["matrix.org"]
+
+log = "info"
