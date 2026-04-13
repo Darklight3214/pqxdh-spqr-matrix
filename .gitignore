@@ -3,3 +3,5 @@
 .pqxdh-*.session
 .pqxdh-*.history
 liboqs/
+matrix-client/venv/
+.pqxdh-group.megolm

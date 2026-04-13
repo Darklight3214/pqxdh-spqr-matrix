@@ -1,3 +1,7 @@
+mod device_manager;
+mod group;
+mod megolm_store;
+
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -10,10 +14,10 @@ use vodozemac::olm::{Account, AccountPickle, SessionConfig, OlmMessage, Session,
 use oqs::kem::{Kem, Algorithm};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
-const CONDUIT: &str = "http://172.16.200.86:6167";
+pub(crate) const CONDUIT: &str = "http://172.16.200.86:6167";
 const SPK_ROTATION_DAYS: u64 = 7;
 
-fn derive_pickle_key(password: &str, username: &str) -> [u8; 32] {
+pub(crate) fn derive_pickle_key(password: &str, username: &str) -> [u8; 32] {
     use hkdf::Hkdf;
     use sha2::Sha256;
     let hkdf: Hkdf<Sha256> = Hkdf::new(Some(username.as_bytes()), password.as_bytes());
@@ -22,7 +26,7 @@ fn derive_pickle_key(password: &str, username: &str) -> [u8; 32] {
     key
 }
 
-fn prompt(label: &str) -> String {
+pub(crate) fn prompt(label: &str) -> String {
     print!("{}", label);
     io::stdout().flush().unwrap();
     let mut s = String::new();
@@ -30,11 +34,11 @@ fn prompt(label: &str) -> String {
     s.trim().to_string()
 }
 
-fn txn_id() -> u128 {
+pub(crate) fn txn_id() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
 }
 
-fn current_timestamp() -> u64 {
+pub(crate) fn current_timestamp() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
@@ -147,7 +151,7 @@ fn cleanup_old_devices(
     }
 }
 
-fn sync(http: &reqwest::blocking::Client, tok: &str, since: Option<&str>, timeout: u64)
+pub(crate) fn sync(http: &reqwest::blocking::Client, tok: &str, since: Option<&str>, timeout: u64)
     -> serde_json::Value
 {
     let mut url = format!("{CONDUIT}/_matrix/client/v3/sync?timeout={timeout}");
@@ -654,14 +658,14 @@ fn wait_for_session(
 
 // ========== HISTORY ==========
 
-fn append_history(username: &str, sender: &str, text: &str) {
+pub(crate) fn append_history(username: &str, sender: &str, text: &str) {
     let path = format!(".pqxdh-{}.history", username);
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{}|{}", sender, text);
     }
 }
 
-fn show_history(username: &str) {
+pub(crate) fn show_history(username: &str) {
     let path = format!(".pqxdh-{}.history", username);
     if let Ok(raw) = fs::read_to_string(&path) {
         let lines: Vec<&str> = raw.lines().collect();
@@ -678,7 +682,7 @@ fn show_history(username: &str) {
     }
 }
 
-fn clear_history(username: &str) {
+pub(crate) fn clear_history(username: &str) {
     let path = format!(".pqxdh-{}.history", username);
     if Path::new(&path).exists() {
         let _ = fs::remove_file(&path);
@@ -1182,73 +1186,90 @@ fn run_session(http: &reqwest::blocking::Client) -> bool {
         }
     }
 
-    // No saved session - determine peer and role
-    let peer = {
-        let p = prompt("\nChat with: ");
-        if p.starts_with("@") { p } else { format!("@{}:matrix.local", p) }
-    };
-    println!("[info] Peer: {}", peer);
+    // No saved session - choose mode first
+    println!("\n[info] Choose mode:");
+    println!("  [1] 1-to-1 chat (Olm+PQXDH+SPQR)");
+    println!("  [g] Group chat (Megolm + PQXDH)");
+    let mode = prompt("Choice [1/g]: ");
 
-    let peer_ready = query_keys(http, &tok, &peer).is_ok();
-
-    let login_again = if peer_ready {
-        println!("\n[info] Choose role:");
-        println!("  [i] Initiate session");
-        println!("  [w] Wait for session");
-        let choice = prompt("Choice [i/w]: ");
-
-        match choice.to_lowercase().as_str() {
-            "w" => {
-                println!("\n[role] RESPONDER - waiting for {}...", peer);
-                let (session, room_id, _sender, initial_braid) = wait_for_session(
-                    http, &tok, &uid, &mut account, &kem_sk_bytes,
-                );
-                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
-                let msg_counter = Arc::new(AtomicU64::new(0));
-                let session_arc = Arc::new(Mutex::new(session));
-                let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
-                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
-            }
-            _ => run_initiator_flow(
-                http, &tok, &uid, &mut account, &peer, &ik_b64,
-                kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
-                &username, spk_created, &did, pickle_key,
-            ),
+    let login_again = match mode.to_lowercase().as_str() {
+        "g" => {
+            group::run_group_chat(
+                http, &tok, &uid, &did, &ik_b64,
+                &mut account, &kem_sk_bytes,
+                &username, pickle_key,
+            )
         }
-    } else {
-        println!("\n[info] {} hasn't uploaded keys yet.", peer);
-        println!("[info] Choose:");
-        println!("  [w] Wait for session");
-        println!("  [r] Retry checking keys");
-        let choice = prompt("Choice [w/r]: ");
+        _ => {
+            // 1-to-1 mode: ask for peer
+            let peer = {
+                let p = prompt("\nChat with: ");
+                if p.starts_with("@") { p } else { format!("@{}:matrix.local", p) }
+            };
+            println!("[info] Peer: {}", peer);
 
-        match choice.to_lowercase().as_str() {
-            "r" => {
-                println!("\n[info] Polling...");
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    print!(".");
-                    io::stdout().flush().ok();
-                    if query_keys(http, &tok, &peer).is_ok() {
-                        println!("\n[info] {} ready!", peer);
-                        return run_initiator_flow(
-                            http, &tok, &uid, &mut account, &peer, &ik_b64,
-                            kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
-                            &username, spk_created, &did, pickle_key,
+            let peer_ready = query_keys(http, &tok, &peer).is_ok();
+
+            if peer_ready {
+                println!("\n[info] Choose role:");
+                println!("  [i] Initiate session");
+                println!("  [w] Wait for session");
+                let choice = prompt("Choice [i/w]: ");
+
+                match choice.to_lowercase().as_str() {
+                    "w" => {
+                        println!("\n[role] RESPONDER - waiting for {}...", peer);
+                        let (session, room_id, _sender, initial_braid) = wait_for_session(
+                            http, &tok, &uid, &mut account, &kem_sk_bytes,
                         );
+                        save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
+                        let msg_counter = Arc::new(AtomicU64::new(0));
+                        let session_arc = Arc::new(Mutex::new(session));
+                        let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
+                        chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
+                    }
+                    _ => run_initiator_flow(
+                        http, &tok, &uid, &mut account, &peer, &ik_b64,
+                        kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
+                        &username, spk_created, &did, pickle_key,
+                    ),
+                }
+            } else {
+                println!("\n[info] {} hasn't uploaded keys yet.", peer);
+                println!("[info] Choose:");
+                println!("  [w] Wait for session");
+                println!("  [r] Retry checking keys");
+                let choice = prompt("Choice [w/r]: ");
+
+                match choice.to_lowercase().as_str() {
+                    "r" => {
+                        println!("\n[info] Polling...");
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            print!(".");
+                            io::stdout().flush().ok();
+                            if query_keys(http, &tok, &peer).is_ok() {
+                                println!("\n[info] {} ready!", peer);
+                                return run_initiator_flow(
+                                    http, &tok, &uid, &mut account, &peer, &ik_b64,
+                                    kem_sk_arc, &kem_pk_bytes, &kem_sk_bytes,
+                                    &username, spk_created, &did, pickle_key,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("\n[role] RESPONDER");
+                        let (session, room_id, _, initial_braid) = wait_for_session(
+                            http, &tok, &uid, &mut account, &kem_sk_bytes,
+                        );
+                        save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
+                        let msg_counter = Arc::new(AtomicU64::new(0));
+                        let session_arc = Arc::new(Mutex::new(session));
+                        let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
+                        chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
                     }
                 }
-            }
-            _ => {
-                println!("\n[role] RESPONDER");
-                let (session, room_id, _, initial_braid) = wait_for_session(
-                    http, &tok, &uid, &mut account, &kem_sk_bytes,
-                );
-                save_state(&username, &account, &kem_pk_bytes, &kem_sk_bytes, spk_created, &did, &pickle_key);
-                let msg_counter = Arc::new(AtomicU64::new(0));
-                let session_arc = Arc::new(Mutex::new(session));
-                let initial_braid_arc: Arc<Mutex<Vec<BraidMessage>>> = Arc::new(Mutex::new(initial_braid));
-                chat_loop(http, &tok, &uid, session_arc, &room_id, &ik_b64, kem_sk_arc, &username, &peer, msg_counter, pickle_key, initial_braid_arc)
             }
         }
     };
