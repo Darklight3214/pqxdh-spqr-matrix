@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════════════
   03_message_size — Full Benchmark Report
-  Generated: 1777270737 (unix epoch + 1777270737s)
+  Generated: 1777274248 (unix epoch + 1777274248s)
 ═══════════════════════════════════════════════════════════════
 
 
@@ -11,62 +11,62 @@
   "note": "CT includes OlmMessage framing. 'PQ Extra' = additional bytes vs classical including Braid messages and SPQR metadata.",
   "sizes": [
     {
-      "braid_extra_bytes": 4530,
+      "braid_extra_bytes": 4511,
       "classical_ct_bytes": 192,
       "classical_overhead": 192,
       "plaintext_bytes": 0,
       "pq_ct_bytes": 192,
-      "pq_extra_vs_classical": 4530,
+      "pq_extra_vs_classical": 4511,
       "pq_overhead": 192,
       "spqr_meta_extra": 0
     },
     {
-      "braid_extra_bytes": 4471,
+      "braid_extra_bytes": 4484,
       "classical_ct_bytes": 208,
       "classical_overhead": 192,
       "plaintext_bytes": 16,
       "pq_ct_bytes": 208,
-      "pq_extra_vs_classical": 4471,
+      "pq_extra_vs_classical": 4484,
       "pq_overhead": 192,
       "spqr_meta_extra": 0
     },
     {
-      "braid_extra_bytes": 4500,
+      "braid_extra_bytes": 4518,
       "classical_ct_bytes": 257,
       "classical_overhead": 193,
       "plaintext_bytes": 64,
       "pq_ct_bytes": 257,
-      "pq_extra_vs_classical": 4500,
+      "pq_extra_vs_classical": 4518,
       "pq_overhead": 193,
       "spqr_meta_extra": 0
     },
     {
-      "braid_extra_bytes": 4452,
+      "braid_extra_bytes": 4473,
       "classical_ct_bytes": 450,
       "classical_overhead": 194,
       "plaintext_bytes": 256,
       "pq_ct_bytes": 450,
-      "pq_extra_vs_classical": 4452,
+      "pq_extra_vs_classical": 4473,
       "pq_overhead": 194,
       "spqr_meta_extra": 0
     },
     {
-      "braid_extra_bytes": 4465,
+      "braid_extra_bytes": 4458,
       "classical_ct_bytes": 1218,
       "classical_overhead": 194,
       "plaintext_bytes": 1024,
       "pq_ct_bytes": 1218,
-      "pq_extra_vs_classical": 4465,
+      "pq_extra_vs_classical": 4458,
       "pq_overhead": 194,
       "spqr_meta_extra": 0
     },
     {
-      "braid_extra_bytes": 4489,
+      "braid_extra_bytes": 4494,
       "classical_ct_bytes": 4290,
       "classical_overhead": 194,
       "plaintext_bytes": 4096,
       "pq_ct_bytes": 4290,
-      "pq_extra_vs_classical": 4489,
+      "pq_extra_vs_classical": 4494,
       "pq_overhead": 194,
       "spqr_meta_extra": 0
     }

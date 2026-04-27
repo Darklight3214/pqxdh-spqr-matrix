@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════════════
   09_bandwidth — Full Benchmark Report
-  Generated: 1777270737 (unix epoch + 1777270737s)
+  Generated: 1777274248 (unix epoch + 1777274248s)
 ═══════════════════════════════════════════════════════════════
 
 
@@ -49,50 +49,50 @@
     {
       "braid_msg_count": 2,
       "classical_bytes": 580,
-      "delta_bytes": 5574,
+      "delta_bytes": 5581,
       "message_count": 1,
-      "overhead_pct": 961.0344827586207,
-      "pq_bytes": 6154
+      "overhead_pct": 962.2413793103448,
+      "pq_bytes": 6161
     },
     {
       "braid_msg_count": 2,
       "classical_bytes": 5800,
-      "delta_bytes": 5712,
+      "delta_bytes": 5708,
       "message_count": 10,
-      "overhead_pct": 98.48275862068967,
-      "pq_bytes": 11512
+      "overhead_pct": 98.41379310344827,
+      "pq_bytes": 11508
     },
     {
       "braid_msg_count": 2,
       "classical_bytes": 29000,
-      "delta_bytes": 6392,
+      "delta_bytes": 6376,
       "message_count": 50,
-      "overhead_pct": 22.041379310344826,
-      "pq_bytes": 35392
+      "overhead_pct": 21.986206896551725,
+      "pq_bytes": 35376
     },
     {
       "braid_msg_count": 2,
       "classical_bytes": 58000,
-      "delta_bytes": 7186,
+      "delta_bytes": 7159,
       "message_count": 100,
-      "overhead_pct": 12.389655172413793,
-      "pq_bytes": 65186
+      "overhead_pct": 12.343103448275862,
+      "pq_bytes": 65159
     },
     {
       "braid_msg_count": 2,
       "classical_bytes": 290373,
-      "delta_bytes": 13577,
+      "delta_bytes": 13559,
       "message_count": 500,
-      "overhead_pct": 4.675710207216236,
-      "pq_bytes": 303950
+      "overhead_pct": 4.669511283762609,
+      "pq_bytes": 303932
     },
     {
       "braid_msg_count": 2,
       "classical_bytes": 580873,
-      "delta_bytes": 21610,
+      "delta_bytes": 21599,
       "message_count": 1000,
-      "overhead_pct": 3.7202624325799274,
-      "pq_bytes": 602483
+      "overhead_pct": 3.7183687312028617,
+      "pq_bytes": 602472
     }
   ]
 }

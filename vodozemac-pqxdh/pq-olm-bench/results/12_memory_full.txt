@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════════════
   12_memory — Full Benchmark Report
-  Generated: 1777270737 (unix epoch + 1777270737s)
+  Generated: 1777274248 (unix epoch + 1777274248s)
 ═══════════════════════════════════════════════════════════════
 
 
@@ -9,23 +9,23 @@
 ═══════════════════════════════════════════════════════════════
 {
   "classical": {
-    "account_alice_bytes": 447,
-    "account_bob_bytes": 448,
-    "session_after_n_msgs_bytes": 1007,
-    "session_alice_fresh_bytes": 994,
-    "session_bob_fresh_bytes": 1144
+    "account_alice_bytes": 443,
+    "account_bob_bytes": 446,
+    "session_after_n_msgs_bytes": 998,
+    "session_alice_fresh_bytes": 990,
+    "session_bob_fresh_bytes": 1141
   },
   "megolm": {
-    "inbound_bytes": 678,
-    "outbound_bytes": 648
+    "inbound_bytes": 698,
+    "outbound_bytes": 665
   },
   "n_msgs_for_growth": 100,
   "pq": {
-    "account_alice_bytes": 449,
-    "account_bob_bytes": 550,
-    "session_after_n_msgs_bytes": 10275,
-    "session_alice_fresh_bytes": 1775,
-    "session_bob_fresh_bytes": 1932
+    "account_alice_bytes": 459,
+    "account_bob_bytes": 547,
+    "session_after_n_msgs_bytes": 10240,
+    "session_alice_fresh_bytes": 1767,
+    "session_bob_fresh_bytes": 1916
   }
 }
 
