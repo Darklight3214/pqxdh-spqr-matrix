@@ -1,0 +1,67 @@
+═══════════════════════════════════════════════════════════════
+  04_security — Full Benchmark Report
+  Generated: 1777270737 (unix epoch + 1777270737s)
+═══════════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════════
+  RAW JSON DATA
+═══════════════════════════════════════════════════════════════
+{
+  "properties": [
+    {
+      "pqxdh_spqr": "PQXDH (4× X25519 + ML-KEM-768)",
+      "property": "Key Agreement",
+      "x3dh_dr": "X3DH (3× X25519)"
+    },
+    {
+      "pqxdh_spqr": "SPQR Triple Ratchet (DR + ML-KEM-768 Braid)",
+      "property": "Ratchet",
+      "x3dh_dr": "Double Ratchet (X25519 DH)"
+    },
+    {
+      "pqxdh_spqr": "AES-256-CBC + HMAC-SHA-256",
+      "property": "AEAD",
+      "x3dh_dr": "AES-256-CBC + HMAC-SHA-256"
+    },
+    {
+      "pqxdh_spqr": "128-bit",
+      "property": "Classical Security",
+      "x3dh_dr": "128-bit"
+    },
+    {
+      "pqxdh_spqr": "NIST Level 3 (ML-KEM-768)",
+      "property": "Quantum Security",
+      "x3dh_dr": "NONE"
+    },
+    {
+      "pqxdh_spqr": "Yes (per DH ratchet step + PQ epoch)",
+      "property": "Forward Secrecy",
+      "x3dh_dr": "Yes (per DH ratchet step)"
+    },
+    {
+      "pqxdh_spqr": "Yes (DH ratchet + PQ Braid ratchet)",
+      "property": "Post-Compromise Sec.",
+      "x3dh_dr": "Yes (DH ratchet)"
+    },
+    {
+      "pqxdh_spqr": "FIPS 203 (ML-KEM-768)",
+      "property": "KEM Standard",
+      "x3dh_dr": "—"
+    },
+    {
+      "pqxdh_spqr": "X25519 ∥ ML-KEM-768 (combined keys)",
+      "property": "Hybrid Approach",
+      "x3dh_dr": "—"
+    },
+    {
+      "pqxdh_spqr": "Protected",
+      "property": "PQ Harvest-Now Attack",
+      "x3dh_dr": "Vulnerable"
+    }
+  ]
+}
+
+═══════════════════════════════════════════════════════════════
+  END OF REPORT
+═══════════════════════════════════════════════════════════════

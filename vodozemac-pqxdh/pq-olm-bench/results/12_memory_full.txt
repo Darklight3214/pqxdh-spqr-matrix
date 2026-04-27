@@ -1,0 +1,34 @@
+═══════════════════════════════════════════════════════════════
+  12_memory — Full Benchmark Report
+  Generated: 1777270737 (unix epoch + 1777270737s)
+═══════════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════════
+  RAW JSON DATA
+═══════════════════════════════════════════════════════════════
+{
+  "classical": {
+    "account_alice_bytes": 447,
+    "account_bob_bytes": 448,
+    "session_after_n_msgs_bytes": 1007,
+    "session_alice_fresh_bytes": 994,
+    "session_bob_fresh_bytes": 1144
+  },
+  "megolm": {
+    "inbound_bytes": 678,
+    "outbound_bytes": 648
+  },
+  "n_msgs_for_growth": 100,
+  "pq": {
+    "account_alice_bytes": 449,
+    "account_bob_bytes": 550,
+    "session_after_n_msgs_bytes": 10275,
+    "session_alice_fresh_bytes": 1775,
+    "session_bob_fresh_bytes": 1932
+  }
+}
+
+═══════════════════════════════════════════════════════════════
+  END OF REPORT
+═══════════════════════════════════════════════════════════════

@@ -1,0 +1,33 @@
+═══════════════════════════════════════════════════════════════
+  06_key_sizes — Full Benchmark Report
+  Generated: 1777270737 (unix epoch + 1777270737s)
+═══════════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════════
+  RAW JSON DATA
+═══════════════════════════════════════════════════════════════
+{
+  "bundles": {
+    "overhead_bytes": 1280,
+    "overhead_factor": 14.333333333333334,
+    "pqxdh_spqr_bundle_bytes": 1376,
+    "prekey_msg_extra_bytes": 1088,
+    "x3dh_dr_bundle_bytes": 96
+  },
+  "keys": {
+    "identity_key_bytes": 32,
+    "kem_ct_bytes": 1088,
+    "kem_pk_bytes": 1184,
+    "kem_sk_bytes": 2400,
+    "kem_ss_bytes": 32,
+    "otk_bytes": 32,
+    "signed_prekey_bytes": 32,
+    "signing_key_bytes": 32,
+    "spk_signature_bytes": 64
+  }
+}
+
+═══════════════════════════════════════════════════════════════
+  END OF REPORT
+═══════════════════════════════════════════════════════════════

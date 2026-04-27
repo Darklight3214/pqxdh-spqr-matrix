@@ -1,0 +1,102 @@
+═══════════════════════════════════════════════════════════════
+  09_bandwidth — Full Benchmark Report
+  Generated: 1777270737 (unix epoch + 1777270737s)
+═══════════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════════
+  RAW JSON DATA
+═══════════════════════════════════════════════════════════════
+{
+  "config": {
+    "kem_ct_size": 1088,
+    "kem_pk_size": 1184,
+    "plaintext_size": 256
+  },
+  "monthly_projection": [
+    {
+      "classical_monthly_bytes": 1650000,
+      "extra_monthly_bytes": 156000,
+      "msgs_per_day": 100,
+      "pq_monthly_bytes": 1806000
+    },
+    {
+      "classical_monthly_bytes": 8250000,
+      "extra_monthly_bytes": 780000,
+      "msgs_per_day": 500,
+      "pq_monthly_bytes": 9030000
+    },
+    {
+      "classical_monthly_bytes": 16500000,
+      "extra_monthly_bytes": 1560000,
+      "msgs_per_day": 1000,
+      "pq_monthly_bytes": 18060000
+    },
+    {
+      "classical_monthly_bytes": 82500000,
+      "extra_monthly_bytes": 7800000,
+      "msgs_per_day": 5000,
+      "pq_monthly_bytes": 90300000
+    },
+    {
+      "classical_monthly_bytes": 165000000,
+      "extra_monthly_bytes": 15600000,
+      "msgs_per_day": 10000,
+      "pq_monthly_bytes": 180600000
+    }
+  ],
+  "per_conversation": [
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 580,
+      "delta_bytes": 5574,
+      "message_count": 1,
+      "overhead_pct": 961.0344827586207,
+      "pq_bytes": 6154
+    },
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 5800,
+      "delta_bytes": 5712,
+      "message_count": 10,
+      "overhead_pct": 98.48275862068967,
+      "pq_bytes": 11512
+    },
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 29000,
+      "delta_bytes": 6392,
+      "message_count": 50,
+      "overhead_pct": 22.041379310344826,
+      "pq_bytes": 35392
+    },
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 58000,
+      "delta_bytes": 7186,
+      "message_count": 100,
+      "overhead_pct": 12.389655172413793,
+      "pq_bytes": 65186
+    },
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 290373,
+      "delta_bytes": 13577,
+      "message_count": 500,
+      "overhead_pct": 4.675710207216236,
+      "pq_bytes": 303950
+    },
+    {
+      "braid_msg_count": 2,
+      "classical_bytes": 580873,
+      "delta_bytes": 21610,
+      "message_count": 1000,
+      "overhead_pct": 3.7202624325799274,
+      "pq_bytes": 602483
+    }
+  ]
+}
+
+═══════════════════════════════════════════════════════════════
+  END OF REPORT
+═══════════════════════════════════════════════════════════════
