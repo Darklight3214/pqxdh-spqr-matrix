@@ -116,16 +116,16 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
 
     serde_json::json!({
         "roundtrip": {
-            "classical": { "summary": cr.summary(), "samples_count": cr.samples.len() },
-            "pq": { "summary": pr.summary(), "samples_count": pr.samples.len() },
+            "classical": { "summary": cr.summary(), "samples": cr.samples },
+            "pq": { "summary": pr.summary(), "samples": pr.samples },
         },
         "initiator": {
-            "classical": { "summary": ci.summary(), "samples_count": ci.samples.len() },
-            "pq": { "summary": pi.summary(), "samples_count": pi.samples.len() },
+            "classical": { "summary": ci.summary(), "samples": ci.samples },
+            "pq": { "summary": pi.summary(), "samples": pi.samples },
         },
         "responder": {
-            "classical": { "summary": cre.summary(), "samples_count": cre.samples.len() },
-            "pq": { "summary": pre.summary(), "samples_count": pre.samples.len() },
+            "classical": { "summary": cre.summary(), "samples": cre.samples },
+            "pq": { "summary": pre.summary(), "samples": pre.samples },
         },
     })
 }

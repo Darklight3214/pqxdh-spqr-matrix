@@ -141,8 +141,8 @@ pub fn run(
 
     serde_json::json!({
         "aggregate": {
-            "x3dh_dr": { "summary": cr_all.summary(), "count": cr_all.samples.len() },
-            "pqxdh_spqr": { "summary": pr_all.summary(), "count": pr_all.samples.len() },
+            "x3dh_dr": { "summary": cr_all.summary(), "samples": cr_all.samples },
+            "pqxdh_spqr": { "summary": pr_all.summary(), "samples": pr_all.samples },
         },
         "pairs": pair_results,
         "config": {

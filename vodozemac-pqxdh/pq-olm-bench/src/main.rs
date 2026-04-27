@@ -247,6 +247,11 @@ fn main() {
     // Write per-metric full reports with ALL raw sample data
     write_all_raw_reports(&all_results, &out_dir);
 
+    // Write per-metric raw CSVs (one row per iteration, Excel-friendly)
+    let raw_dir = out_dir.join("raw_csvs");
+    let _ = std::fs::create_dir_all(&raw_dir);
+    write_all_raw_csvs(&all_results, &raw_dir);
+
     println!("\n╔══════════════════════════════════════════════════════════╗");
     println!("║                   Benchmark Complete                    ║");
     println!("╚══════════════════════════════════════════════════════════╝");
@@ -377,3 +382,63 @@ fn extract_and_write_summaries(
         }
     }
 }
+
+/// Walk the results JSON and write a raw CSV for every "samples" array found.
+/// Each CSV has columns: iteration, value_ns — one row per sample.
+/// Filenames use the dotted JSON path, e.g. "01_handshake.roundtrip.classical.csv".
+fn write_all_raw_csvs(results: &serde_json::Map<String, serde_json::Value>, out_dir: &PathBuf) {
+    use std::io::Write;
+
+    println!("\n  Writing raw sample CSVs to {}/", out_dir.display());
+
+    for (metric_name, metric_data) in results {
+        if metric_name.starts_with('_') { continue; }
+        extract_and_write_csvs(metric_name, metric_data, metric_name, out_dir);
+    }
+}
+
+/// Recursively walk JSON to find "samples" arrays and write each as a CSV.
+fn extract_and_write_csvs(
+    root_metric: &str,
+    value: &serde_json::Value,
+    path: &str,
+    out_dir: &std::path::PathBuf,
+) {
+    use std::io::Write;
+
+    if let Some(obj) = value.as_object() {
+        // If this object has a "samples" array, write it
+        if let Some(samples) = obj.get("samples") {
+            if let Some(arr) = samples.as_array() {
+                if !arr.is_empty() {
+                    let filename = format!("{}.csv", path.replace('/', "_"));
+                    let csv_path = out_dir.join(&filename);
+                    if let Ok(mut f) = std::fs::File::create(&csv_path) {
+                        let _ = writeln!(f, "iteration,value_ns");
+                        for (i, val) in arr.iter().enumerate() {
+                            let v = val.as_f64().unwrap_or(0.0);
+                            let _ = writeln!(f, "{},{:.0}", i + 1, v);
+                        }
+                        println!("    ✓ {} ({} rows)", filename, arr.len());
+                    }
+                }
+            }
+        }
+
+        // Recurse into child objects
+        for (key, child) in obj {
+            if key == "samples" || key == "summary" { continue; }
+            let child_path = format!("{}.{}", path, key);
+            extract_and_write_csvs(root_metric, child, &child_path, out_dir);
+        }
+    }
+
+    // Handle arrays (e.g., key_distribution is an array of objects)
+    if let Some(arr) = value.as_array() {
+        for (i, item) in arr.iter().enumerate() {
+            let child_path = format!("{}.{}", path, i);
+            extract_and_write_csvs(root_metric, item, &child_path, out_dir);
+        }
+    }
+}
+

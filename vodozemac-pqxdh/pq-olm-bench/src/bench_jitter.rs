@@ -127,6 +127,7 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
     serde_json::json!({
         "x3dh_dr": {
             "summary": cr.summary(),
+            "samples": cr.samples,
             "jitter": {
                 "cv": c_jitter.cv,
                 "iqr": c_jitter.iqr,
@@ -143,6 +144,7 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
         },
         "pqxdh_spqr": {
             "summary": pr.summary(),
+            "samples": pr.samples,
             "jitter": {
                 "cv": p_jitter.cv,
                 "iqr": p_jitter.iqr,

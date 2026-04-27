@@ -138,13 +138,13 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
 
     serde_json::json!({
         "keygen": {
-            "x3dh_dr": { "summary": x_kg_s, "ops_per_sec": ops_sec(x_kg_s.mean) },
-            "pqxdh_spqr": { "summary": kem_kg_s, "ops_per_sec": ops_sec(kem_kg_s.mean) },
+            "x3dh_dr": { "summary": x_kg_s, "ops_per_sec": ops_sec(x_kg_s.mean), "samples": x_keygen.samples },
+            "pqxdh_spqr": { "summary": kem_kg_s, "ops_per_sec": ops_sec(kem_kg_s.mean), "samples": kem_keygen.samples },
         },
         "exchange": {
-            "x3dh_dr_dh": { "summary": x_dh_s, "ops_per_sec": ops_sec(x_dh_s.mean) },
-            "pqxdh_spqr_encaps": { "summary": kem_en_s, "ops_per_sec": ops_sec(kem_en_s.mean) },
-            "pqxdh_spqr_decaps": { "summary": kem_de_s, "ops_per_sec": ops_sec(kem_de_s.mean) },
+            "x3dh_dr_dh": { "summary": x_dh_s, "ops_per_sec": ops_sec(x_dh_s.mean), "samples": x_dh.samples },
+            "pqxdh_spqr_encaps": { "summary": kem_en_s, "ops_per_sec": ops_sec(kem_en_s.mean), "samples": kem_encaps.samples },
+            "pqxdh_spqr_decaps": { "summary": kem_de_s, "ops_per_sec": ops_sec(kem_de_s.mean), "samples": kem_decaps.samples },
         },
     })
 }

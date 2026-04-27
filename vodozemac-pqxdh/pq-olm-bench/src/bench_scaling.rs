@@ -105,10 +105,12 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
             "classical": {
                 "summary": cs,
                 "msgs_per_sec": c_msgs_sec,
+                "samples": cr.samples,
             },
             "pq": {
                 "summary": ps,
                 "msgs_per_sec": p_msgs_sec,
+                "samples": pr.samples,
             },
         }));
     }

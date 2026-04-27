@@ -88,12 +88,12 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
 
         result_map.insert(format!("{}B", size), serde_json::json!({
             "encrypt": {
-                "classical": { "summary": ce.summary() },
-                "pq": { "summary": pe.summary() },
+                "classical": { "summary": ce.summary(), "samples": ce.samples },
+                "pq": { "summary": pe.summary(), "samples": pe.samples },
             },
             "decrypt": {
-                "classical": { "summary": cd.summary() },
-                "pq": { "summary": pd.summary() },
+                "classical": { "summary": cd.summary(), "samples": cd.samples },
+                "pq": { "summary": pd.summary(), "samples": pd.samples },
             },
         }));
     }

@@ -102,7 +102,7 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
     output::print_comparison_table("Ratchet Step (2 direction changes)", &cr, &pr);
 
     serde_json::json!({
-        "classical": { "summary": cr.summary(), "samples_count": cr.samples.len() },
-        "pq": { "summary": pr.summary(), "samples_count": pr.samples.len() },
+        "classical": { "summary": cr.summary(), "samples": cr.samples },
+        "pq": { "summary": pr.summary(), "samples": pr.samples },
     })
 }

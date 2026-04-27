@@ -45,8 +45,8 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
         );
 
         result_map.insert(format!("{}B", size), serde_json::json!({
-            "encrypt": { "summary": enc.summary() },
-            "decrypt": { "summary": dec.summary() },
+            "encrypt": { "summary": enc.summary(), "samples": enc.samples },
+            "decrypt": { "summary": dec.summary(), "samples": dec.samples },
         }));
     }
 
@@ -84,6 +84,7 @@ pub fn run(iterations: usize, warmup: usize) -> serde_json::Value {
         dist_results.push(serde_json::json!({
             "group_size": n,
             "summary": s,
+            "samples": kr.samples,
         }));
     }
 
